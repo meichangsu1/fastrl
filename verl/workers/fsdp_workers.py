@@ -629,6 +629,18 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
             drafter_module.t2d.copy_(eagle3_vocab_mapping["t2d"].to(device=drafter_module.t2d.device))
 
         base_module = self.actor_module_fsdp.unshard()
+        # FSDP/FSDP2 wrappers may return a container instead of the underlying HF module.
+        while True:
+            next_base_module = None
+            for attr in ("module", "_fsdp_wrapped_module"):
+                candidate = getattr(base_module, attr, None)
+                if candidate is not None and candidate is not base_module:
+                    next_base_module = candidate
+                    break
+            if next_base_module is None:
+                break
+            base_module = next_base_module
+
         base_model_lm_head = None
         if hasattr(base_module, "lm_head"):
             if spec_strategy == "EAGLE3":
