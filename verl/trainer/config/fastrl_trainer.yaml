@@ -5,6 +5,7 @@
 
 speculative:
   enable: true
+  enable_inference: true
   spec_strategy: "eagle"
   bs_threshold: 32
   eagle:

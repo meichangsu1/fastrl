@@ -284,8 +284,14 @@ class SGLangRollout(BaseRollout):
         os.environ.setdefault("SGL_DISABLE_TP_MEMORY_INBALANCE_CHECK", "true")
 
         self.use_spec = True if hasattr(self.config, "speculative") and self.config.speculative.enable else False
+        self.use_spec_inference = bool(self.use_spec and self.config.speculative.get("enable_inference", True))
+        self.use_spec_training = bool(
+            self.use_spec
+            and self.config.speculative.train.enable_drafter_training
+            and self.config.speculative.train.get("collect_hidden_states_from_sgl", False)
+        )
 
-        if self.use_spec:
+        if self.use_spec_inference:
             self.speculative_args = {
                 "speculative_algorithm": self.config.speculative.spec_strategy,
                 "speculative_draft_model_path": self.config.speculative.eagle.spec_model_path,
@@ -481,11 +487,7 @@ class SGLangRollout(BaseRollout):
                 trust_remote_code=trust_remote_code,
                 # Return last-layer hidden states directly from engine
                 # Only enable if explicitly requested via collect_hidden_states_from_sgl config
-                enable_return_hidden_states=bool(
-                    self.use_spec
-                    and self.config.speculative.train.enable_drafter_training
-                    and self.config.speculative.train.get("collect_hidden_states_from_sgl", False)
-                ),
+                enable_return_hidden_states=self.use_spec_training,
                 # NOTE(linjunrong): add rank to prevent SGLang generate same port inside PortArgs.init_new
                 # when random.seed is being set during training
                 port=30000 + rank,
@@ -761,8 +763,7 @@ class SGLangRollout(BaseRollout):
 
         if (
             hasattr(self.config, "speculative")
-            and self.use_spec
-            and self.config.speculative.train.enable_drafter_training
+            and self.use_spec_training
             and self.drafter_manager
         ):
             # For early memory release, use a more flexible approach
@@ -871,9 +872,7 @@ class SGLangRollout(BaseRollout):
         # Only collect data one step before training to improve efficiency
         should_collect = False
         if (
-            self.use_spec
-            and self.config.speculative.train.enable_drafter_training
-            and self.config.speculative.train.get("collect_hidden_states_from_sgl", False)
+            self.use_spec_training
             and self.drafter_manager is not None
             and self.drafter_manager.should_collect_data_this_step()  # Check if we should collect this step
         ):
@@ -1010,9 +1009,7 @@ class SGLangRollout(BaseRollout):
             input_ids=idx_list,
             image_data=image_list,
             return_hidden_states=bool(
-                self.use_spec
-                and self.config.speculative.train.enable_drafter_training
-                and self.config.speculative.train.get("collect_hidden_states_from_sgl", False)
+                self.use_spec_training
                 and self.drafter_manager is not None
             ),
         )
