@@ -1201,36 +1201,8 @@ class RayPPOTrainer:
 
                     # recompute old_log_probs
                     with marked_timer("old_log_prob", timing_raw, color="blue"):
-                        # Check if we should collect hidden states for drafter training
-                        should_collect_for_drafter = False
-                        if (
-                            hasattr(self.config, "speculative")
-                            and self.config.speculative.get("enable", False)
-                            and self.config.speculative.get("train", {}).get("enable_drafter_training", False)
-                        ):
-                            training_interval_steps = self.config.speculative.get("train", {}).get(
-                                "training_interval_steps", 1
-                            )
-                            # Collect one step before training
-                            should_collect_for_drafter = (self.global_steps + 1) % training_interval_steps == 0
-
-                        if should_collect_for_drafter:
-                            batch.meta_info["return_hidden_states"] = True
-
                         old_log_prob = self.actor_rollout_wg.compute_log_prob(batch)
                         entropys = old_log_prob.batch["entropys"]
-
-                        # Extract and send hidden states to drafter manager if available
-                        if should_collect_for_drafter and "hidden_states" in old_log_prob.meta_info:
-                            hidden_states = old_log_prob.meta_info.pop("hidden_states")
-                            try:
-                                self.actor_rollout_wg.add_drafter_data_to_buffer(batch, hidden_states)
-                            except Exception:
-                                logger.exception("Failed to add drafter data to buffer")
-
-                        # Clean up meta_info
-                        if "return_hidden_states" in batch.meta_info:
-                            batch.meta_info.pop("return_hidden_states")
                         response_masks = batch.batch["response_mask"]
                         loss_agg_mode = self.config.actor_rollout_ref.actor.loss_agg_mode
                         entropy_agg = agg_loss(loss_mat=entropys, loss_mask=response_masks, loss_agg_mode=loss_agg_mode)
