@@ -305,6 +305,7 @@ class Qwen3ForCausalLM(nn.Module):
         super().__init__()
         self.pp_group = get_pp_group()
         self.config = config
+        self.hot_token_id = None
         self.quant_config = quant_config
         self.model = Qwen3Model(
             config, quant_config=quant_config, prefix=add_prefix("model", prefix)
@@ -507,6 +508,9 @@ class Qwen3ForCausalLM(nn.Module):
 
     def get_embed_and_head(self):
         return self.model.embed_tokens.weight, self.lm_head.weight
+
+    def get_embed(self):
+        return self.model.embed_tokens.weight
 
     def set_embed(self, embed):
         del self.model.embed_tokens.weight
