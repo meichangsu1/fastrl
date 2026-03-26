@@ -157,7 +157,7 @@ class EAGLE3BackgroundTrainer:
         try:
             checkpoint_path = os.path.join(self.checkpoint_dir, f"eagle3_step_{step}")
             os.makedirs(checkpoint_path, exist_ok=True)
-            logger.info(
+            logger.warning(
                 f"[EAGLE3Trainer rank {self.rank}] Saving {'final ' if is_final else ''}checkpoint to {checkpoint_path}"
             )
 
@@ -168,7 +168,7 @@ class EAGLE3BackgroundTrainer:
             if self.rank == 0 and len(full_model_state_dict) > 0:
                 model_export_path = os.path.join(checkpoint_path, "model.pt")
                 torch.save(full_model_state_dict, model_export_path)
-                logger.info(f"[EAGLE3Trainer rank 0] Exported reloadable drafter weights to {model_export_path}")
+                logger.warning(f"[EAGLE3Trainer rank 0] Exported reloadable drafter weights to {model_export_path}")
                 trainer_state_path = os.path.join(checkpoint_path, "trainer_state.pt")
                 torch.save({"step": step, "is_final": is_final}, trainer_state_path)
 
@@ -176,7 +176,7 @@ class EAGLE3BackgroundTrainer:
                 dist.barrier(self.training_device_mesh.get_group())
 
             if not bool(self.config.get("save_distributed_checkpoint", False)):
-                logger.info(
+                logger.warning(
                     f"[EAGLE3Trainer rank {self.rank}] Skipping distributed DCP save at step={step}; "
                     "saved rank-0 reloadable checkpoint only."
                 )
@@ -538,6 +538,10 @@ class EAGLE3BackgroundTrainer:
             )
 
         if self.checkpoint_dir and (step // 100) > self._last_ckpt_step:
+            logger.warning(
+                f"[EAGLE3Trainer rank {self.rank}] checkpoint gate reached at step={step}, "
+                f"training_steps={self.training_steps}, last_ckpt_bucket={self._last_ckpt_step}"
+            )
             if self._pending_checkpoint_future is not None:
                 try:
                     self._pending_checkpoint_future.result()
@@ -588,7 +592,9 @@ class EAGLE3BackgroundTrainer:
             self._pending_checkpoint_future = None
 
         if self.checkpoint_dir and self.model is not None:
-            logger.info(f"[EAGLE3Trainer rank {self.rank}] Triggering final checkpoint save at step={self.training_steps}")
+            logger.warning(
+                f"[EAGLE3Trainer rank {self.rank}] Triggering final checkpoint save at step={self.training_steps}"
+            )
             final_future = self._save_checkpoint_async(self.training_steps, is_final=True)
             if final_future is not None:
                 try:
