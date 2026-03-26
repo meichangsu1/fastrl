@@ -708,18 +708,39 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
         base_model_lm_head = None
         if hasattr(base_module, "lm_head"):
             if spec_strategy == "EAGLE3":
-                base_model_lm_head = _materialize_module_(
-                    deepcopy(base_module.lm_head), device=get_device_name(), dtype=torch.bfloat16
+                base_lm_head_weight = _materialize_tensor(
+                    base_module.lm_head.weight.data,
+                    device=get_device_name(),
+                    dtype=torch.bfloat16,
                 )
+                base_lm_head_bias = None
+                if getattr(base_module.lm_head, "bias", None) is not None:
+                    base_lm_head_bias = _materialize_tensor(
+                        base_module.lm_head.bias.data,
+                        device=get_device_name(),
+                        dtype=torch.bfloat16,
+                    )
+                base_model_lm_head = torch.nn.Linear(
+                    base_lm_head_weight.shape[1],
+                    base_lm_head_weight.shape[0],
+                    bias=base_lm_head_bias is not None,
+                    device=get_device_name(),
+                    dtype=torch.bfloat16,
+                )
+                base_model_lm_head.weight.data.copy_(base_lm_head_weight)
+                if base_lm_head_bias is not None:
+                    base_model_lm_head.bias.data.copy_(base_lm_head_bias)
                 for param in base_model_lm_head.parameters():
                     param.requires_grad = False
 
                 if "lm_head.weight" not in renamed_checkpoint and "model.lm_head.weight" not in renamed_checkpoint:
-                    base_lm_head_weight = _materialize_tensor(
-                        base_module.lm_head.weight.data,
-                        device=drafter_module.lm_head.weight.device,
-                        dtype=drafter_module.lm_head.weight.dtype,
-                    )
+                    if (
+                        base_lm_head_weight.device != drafter_module.lm_head.weight.device
+                        or base_lm_head_weight.dtype != drafter_module.lm_head.weight.dtype
+                    ):
+                        base_lm_head_weight = base_lm_head_weight.to(
+                            device=drafter_module.lm_head.weight.device, dtype=drafter_module.lm_head.weight.dtype
+                        )
                     hot_token_id = drafter_module.d2t + torch.arange(
                         drafter_module.d2t.shape[0], device=drafter_module.d2t.device, dtype=drafter_module.d2t.dtype
                     )

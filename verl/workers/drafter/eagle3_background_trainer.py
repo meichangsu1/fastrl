@@ -343,6 +343,25 @@ class EAGLE3BackgroundTrainer:
         input_ids_concat = torch.cat(input_ids_list, dim=0).unsqueeze(0)
         loss_mask_concat = torch.cat(loss_mask_list, dim=0).unsqueeze(0)
         hidden_states_concat = torch.cat(hidden_states_list, dim=0).unsqueeze(0)
+
+        expected_hidden_dim = int(getattr(self.model.config, "target_hidden_size", self.model.config.hidden_size))
+        expected_fc_in_features = getattr(getattr(self.model, "fc", None), "in_features", None)
+        if expected_fc_in_features is not None and hidden_states_concat.size(-1) != expected_fc_in_features:
+            if hidden_states_concat.size(-1) == expected_hidden_dim and expected_fc_in_features == expected_hidden_dim * 3:
+                logger.warning(
+                    f"[Rank {self.rank}] Collected single-layer hidden states with dim={hidden_states_concat.size(-1)} "
+                    f"but drafter fc expects {expected_fc_in_features}. Repeating hidden states 3x as a temporary "
+                    "online-training fallback."
+                )
+                hidden_states_concat = torch.cat(
+                    [hidden_states_concat, hidden_states_concat, hidden_states_concat], dim=-1
+                )
+            else:
+                logger.warning(
+                    f"[Rank {self.rank}] Hidden-state dim mismatch for EAGLE3 batch prep: "
+                    f"got={hidden_states_concat.size(-1)}, expected_fc_in_features={expected_fc_in_features}, "
+                    f"target_hidden_size={expected_hidden_dim}"
+                )
         total_seq_len = input_ids_concat.size(1)
         attn_mask = torch.ones((1, total_seq_len), dtype=torch.long, device=dev)
 
