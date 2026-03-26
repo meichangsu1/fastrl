@@ -50,6 +50,10 @@ class EAGLE3BackgroundTrainer:
         self.training_device_mesh = drafter_device_mesh
         self.model_config = model_config
         self.base_model_lm_head = base_model_lm_head
+        logger.info(
+            f"[EAGLE3Trainer rank {self.rank}] initialized with "
+            f"base_model_lm_head={'present' if self.base_model_lm_head is not None else 'missing'}"
+        )
 
         self.is_offload_param = self.config.get("is_offload_param", False)
         self.is_offload_optimizer = self.config.get("is_offload_optimizer", False)

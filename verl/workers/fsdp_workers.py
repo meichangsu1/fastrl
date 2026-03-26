@@ -629,6 +629,7 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
             drafter_module.t2d.copy_(eagle3_vocab_mapping["t2d"].to(device=drafter_module.t2d.device))
 
         base_module = self.actor_module_fsdp.unshard()
+        unwrap_chain = [base_module.__class__.__name__]
         # FSDP/FSDP2 wrappers may return a container instead of the underlying HF module.
         while True:
             next_base_module = None
@@ -636,10 +637,37 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
                 candidate = getattr(base_module, attr, None)
                 if candidate is not None and candidate is not base_module:
                     next_base_module = candidate
+                    unwrap_chain.append(f"{attr}:{candidate.__class__.__name__}")
                     break
             if next_base_module is None:
                 break
             base_module = next_base_module
+
+        candidate_modules = [("unwrapped", base_module)]
+        for attr in ("_fsdp_wrapped_module", "module"):
+            candidate = getattr(self.actor_module_fsdp, attr, None)
+            if candidate is not None:
+                candidate_modules.append((f"actor_module_fsdp.{attr}", candidate))
+
+        resolved_base_module = None
+        for candidate_name, candidate_module in candidate_modules:
+            if hasattr(candidate_module, "lm_head"):
+                resolved_base_module = candidate_module
+                logger.info(
+                    f"Resolved base module for drafter init from {candidate_name}: "
+                    f"{candidate_module.__class__.__name__} (unwrap_chain={unwrap_chain})"
+                )
+                break
+
+        if resolved_base_module is not None:
+            base_module = resolved_base_module
+        else:
+            logger.warning(
+                "Failed to resolve base module with lm_head for drafter init. "
+                f"unwrap_chain={unwrap_chain}, final_class={base_module.__class__.__name__}, "
+                f"has_lm_head={hasattr(base_module, 'lm_head')}, "
+                f"top_level_attrs={[attr for attr in ('lm_head', 'model', '_fsdp_wrapped_module', 'module') if hasattr(base_module, attr)]}"
+            )
 
         base_model_lm_head = None
         if hasattr(base_module, "lm_head"):
@@ -659,6 +687,11 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
                 for param in drafter_module.lm_head.parameters():
                     param.requires_grad = False
                 logger.info("Successfully load lm_head for drafter model")
+        else:
+            logger.warning(
+                f"Base module {base_module.__class__.__name__} does not expose lm_head; "
+                "EAGLE3 trainer will not be able to build frozen base_model_lm_head."
+            )
 
         if hasattr(base_module, "model") and hasattr(base_module.model, "embed_tokens"):
             if spec_strategy == "EAGLE3":
@@ -670,6 +703,13 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
                 for param in drafter_module.model.embed_tokens.parameters():
                     param.requires_grad = False
             logger.info("Successfully load embed_tokens for drafter model")
+
+        if spec_strategy == "EAGLE3":
+            logger.info(
+                "EAGLE3 drafter init summary: "
+                f"base_model_lm_head={'present' if base_model_lm_head is not None else 'missing'}, "
+                f"base_module_class={base_module.__class__.__name__}"
+            )
 
         del base_module
 

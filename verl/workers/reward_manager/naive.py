@@ -13,6 +13,7 @@
 # limitations under the License.
 
 from collections import defaultdict
+import re
 from typing import Any
 
 import torch
@@ -57,6 +58,15 @@ class NaiveRewardManager(AbstractRewardManager):
         reward_extra_info = defaultdict(list)
 
         already_print_data_sources = {}
+        warned_missing_reward_meta = False
+
+        def _extract_gsm8k_ground_truth(answer: str | None):
+            if not answer:
+                return None
+            matches = re.findall(r"####\s*([\-0-9\.\,]+)", answer)
+            if not matches:
+                return None
+            return matches[-1].replace(",", "").replace("$", "")
 
         for i in range(len(data)):
             data_item = data[i]  # DataProtoItem
@@ -76,8 +86,24 @@ class NaiveRewardManager(AbstractRewardManager):
             prompt_str = self.tokenizer.decode(valid_prompt_ids, skip_special_tokens=True)
             response_str = self.tokenizer.decode(valid_response_ids, skip_special_tokens=True)
 
-            ground_truth = data_item.non_tensor_batch["reward_model"]["ground_truth"]
-            data_source = data_item.non_tensor_batch[self.reward_fn_key]
+            reward_model_meta = data_item.non_tensor_batch.get("reward_model", None)
+            ground_truth = None
+            if isinstance(reward_model_meta, dict):
+                ground_truth = reward_model_meta.get("ground_truth", None)
+
+            data_source = data_item.non_tensor_batch.get(self.reward_fn_key, None)
+            if data_source is None:
+                data_source = "openai/gsm8k"
+
+            if ground_truth is None:
+                ground_truth = _extract_gsm8k_ground_truth(data_item.non_tensor_batch.get("answer", None))
+                if not warned_missing_reward_meta:
+                    warned_missing_reward_meta = True
+                    print(
+                        "[reward_manager] Missing reward_model.ground_truth in dataset; "
+                        f"falling back to answer/data_source for scoring (data_source={data_source})."
+                    )
+
             extra_info = data_item.non_tensor_batch.get("extra_info", {})
             num_turns = data_item.non_tensor_batch.get("__num_turns__", None)
             extra_info["num_turns"] = num_turns
