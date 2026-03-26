@@ -13,6 +13,7 @@ from torch.distributed.device_mesh import DeviceMesh
 from verl.utils.data_buffer import DataBuffer
 from verl.utils.device import is_cuda_available, is_npu_available
 from verl.utils.fsdp_utils import (
+    get_fsdp_full_state_dict,
     get_device_id,
     load_fsdp_model_to_gpu,
     load_fsdp_optimizer,
@@ -120,6 +121,24 @@ class EAGLE3BackgroundTrainer:
 
         return trainable_state_dict
 
+    def _get_trainable_full_state_dict(self) -> dict[str, torch.Tensor]:
+        """Get a rank-0 full trainable state dict that can be reloaded via the existing *.pt loader."""
+        full_state_dict = get_fsdp_full_state_dict(self.model, offload_to_cpu=True, rank0_only=True)
+        if dist.is_initialized() and dist.get_rank() != 0:
+            return {}
+
+        trainable_state_dict = {}
+        frozen_param_names = {name for name, param in self.model.named_parameters() if not param.requires_grad}
+        for name, value in full_state_dict.items():
+            if name in frozen_param_names:
+                continue
+            if isinstance(value, torch.Tensor):
+                trainable_state_dict[name] = value.detach().cpu()
+            else:
+                trainable_state_dict[name] = value
+
+        return trainable_state_dict
+
     def _save_checkpoint_async(self, step: int, is_final: bool = False):
         if not self.checkpoint_dir:
             return None
@@ -137,6 +156,13 @@ class EAGLE3BackgroundTrainer:
                 checkpoint_id=checkpoint_path,
                 process_group=self.training_device_mesh.get_group(),
             )
+
+            full_model_state_dict = self._get_trainable_full_state_dict()
+            if self.rank == 0 and len(full_model_state_dict) > 0:
+                model_export_path = os.path.join(checkpoint_path, "model.pt")
+                torch.save(full_model_state_dict, model_export_path)
+                logger.info(f"[EAGLE3Trainer rank 0] Exported reloadable drafter weights to {model_export_path}")
+
             return future
         except Exception as e:  # noqa: BLE001
             logger.warning(f"Async checkpoint save failed on rank {self.rank}: {e}")
