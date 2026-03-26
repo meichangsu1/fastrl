@@ -154,6 +154,15 @@ class EAGLE3BackgroundTrainer:
                 f"[EAGLE3Trainer rank {self.rank}] Saving {'final ' if is_final else ''}checkpoint to {checkpoint_path}"
             )
 
+            # Materialize a full trainable state dict before launching DCP async_save.
+            # get_fsdp_full_state_dict() participates in FSDP collectives, so it must not run
+            # concurrently with dcp.async_save() on the same training mesh.
+            full_model_state_dict = self._get_trainable_full_state_dict()
+            if self.rank == 0 and len(full_model_state_dict) > 0:
+                model_export_path = os.path.join(checkpoint_path, "model.pt")
+                torch.save(full_model_state_dict, model_export_path)
+                logger.info(f"[EAGLE3Trainer rank 0] Exported reloadable drafter weights to {model_export_path}")
+
             model_state_dict = self._get_trainable_state_dict()
             optimizer_state_dict = self.optimizer.state_dict() if self.optimizer else {}
             state_dict = {"model": model_state_dict, "optimizer": optimizer_state_dict, "step": step}
@@ -163,12 +172,6 @@ class EAGLE3BackgroundTrainer:
                 checkpoint_id=checkpoint_path,
                 process_group=self.training_device_mesh.get_group(),
             )
-
-            full_model_state_dict = self._get_trainable_full_state_dict()
-            if self.rank == 0 and len(full_model_state_dict) > 0:
-                model_export_path = os.path.join(checkpoint_path, "model.pt")
-                torch.save(full_model_state_dict, model_export_path)
-                logger.info(f"[EAGLE3Trainer rank 0] Exported reloadable drafter weights to {model_export_path}")
 
             return future
         except Exception as e:  # noqa: BLE001
