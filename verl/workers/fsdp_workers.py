@@ -628,7 +628,20 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
             drafter_module.d2t.copy_(eagle3_vocab_mapping["d2t"].to(device=drafter_module.d2t.device))
             drafter_module.t2d.copy_(eagle3_vocab_mapping["t2d"].to(device=drafter_module.t2d.device))
 
-        base_module = self.actor_module_fsdp.unshard()
+        base_module = self.actor_module_fsdp
+        unshard_result = None
+        if hasattr(self.actor_module_fsdp, "unshard"):
+            try:
+                unshard_result = self.actor_module_fsdp.unshard()
+                wait_fn = getattr(unshard_result, "wait", None)
+                if callable(wait_fn):
+                    wait_fn()
+                logger.info(
+                    "Called actor_module_fsdp.unshard() before drafter init: "
+                    f"return_type={type(unshard_result).__name__ if unshard_result is not None else 'None'}"
+                )
+            except Exception as e:
+                logger.warning(f"Failed to unshard actor module for drafter init: {e}")
         unwrap_chain = [base_module.__class__.__name__]
         # FSDP/FSDP2 wrappers may return a container instead of the underlying HF module.
         while True:
@@ -710,6 +723,12 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
                 f"base_model_lm_head={'present' if base_model_lm_head is not None else 'missing'}, "
                 f"base_module_class={base_module.__class__.__name__}"
             )
+
+        if hasattr(self.actor_module_fsdp, "reshard"):
+            try:
+                self.actor_module_fsdp.reshard()
+            except Exception as e:
+                logger.warning(f"Failed to reshard actor module after drafter init: {e}")
 
         del base_module
 
