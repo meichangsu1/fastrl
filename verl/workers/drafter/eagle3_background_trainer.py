@@ -3,6 +3,7 @@ import logging
 import os
 import time
 from collections import deque
+from concurrent.futures import Future
 from typing import Optional
 
 import torch
@@ -29,6 +30,12 @@ elif is_npu_available:
 
 logger = logging.getLogger(__name__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "INFO"))
+
+
+def _completed_future():
+    future = Future()
+    future.set_result(None)
+    return future
 
 
 class EAGLE3BackgroundTrainer:
@@ -162,6 +169,18 @@ class EAGLE3BackgroundTrainer:
                 model_export_path = os.path.join(checkpoint_path, "model.pt")
                 torch.save(full_model_state_dict, model_export_path)
                 logger.info(f"[EAGLE3Trainer rank 0] Exported reloadable drafter weights to {model_export_path}")
+                trainer_state_path = os.path.join(checkpoint_path, "trainer_state.pt")
+                torch.save({"step": step, "is_final": is_final}, trainer_state_path)
+
+            if self.training_device_mesh is not None and self.training_device_mesh.size() > 1:
+                dist.barrier(self.training_device_mesh.get_group())
+
+            if not bool(self.config.get("save_distributed_checkpoint", False)):
+                logger.info(
+                    f"[EAGLE3Trainer rank {self.rank}] Skipping distributed DCP save at step={step}; "
+                    "saved rank-0 reloadable checkpoint only."
+                )
+                return _completed_future()
 
             model_state_dict = self._get_trainable_state_dict()
             optimizer_state_dict = self.optimizer.state_dict() if self.optimizer else {}
