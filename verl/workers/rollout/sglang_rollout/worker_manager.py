@@ -245,6 +245,9 @@ class CentralCoordinator:
     async def _check_and_start_training(self):
         """Check if conditions are met to start training and broadcast command if so."""
         if self.training_active:
+            logger.info(
+                f"Skip START_TRAINING check: training already active with ranks={sorted(self.training_ranks)}"
+            )
             return  # Training already active
 
         # Count released DP workers
@@ -253,7 +256,16 @@ class CentralCoordinator:
             if winfo.state == WorkerState.RELEASED:
                 released_dp_ranks.add(winfo.dp_rank)
 
+        logger.info(
+            f"START_TRAINING check: released_dp_ranks={sorted(released_dp_ranks)} "
+            f"min_workers_for_training={self.min_workers_for_training}"
+        )
+
         if len(released_dp_ranks) < self.min_workers_for_training:
+            logger.info(
+                f"Not starting training: only {len(released_dp_ranks)} released DP workers, "
+                f"need {self.min_workers_for_training}"
+            )
             return  # Not enough workers released
 
         # Select which DP workers will train (first N released)
@@ -498,7 +510,10 @@ class RolloutDrafterManager:
     def increment_rl_step(self):
         """Increment the RL step counter."""
         self.current_rl_step += 1
-        logger.debug(f"RolloutDrafterManager RL step incremented to {self.current_rl_step}")
+        logger.info(
+            f"RolloutDrafterManager RL step incremented to {self.current_rl_step} "
+            f"(training_interval_steps={self.training_interval_steps})"
+        )
 
     async def initialize(self):
         """Initialize communication system."""
@@ -647,7 +662,7 @@ class RolloutDrafterManager:
 
         # Check if should train this RL step
         if not self.should_train_this_step():
-            logger.debug(
+            logger.info(
                 f"Worker {self.rank} skipping training for RL step {self.current_rl_step} "
                 f"(interval={self.training_interval_steps})"
             )
