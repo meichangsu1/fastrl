@@ -460,6 +460,7 @@ class SGLangRollout(BaseRollout):
         first_rank_in_node = self._tp_rank % tp_size_per_node == 0
         engine_kwargs = self.config.get("engine_kwargs", {}).get("sglang", {})
         attention_backend = engine_kwargs.get("attention_backend", None)
+        disable_cuda_graph = bool(engine_kwargs.get("disable_cuda_graph", False))
 
         if first_rank_in_node:
             rank = dist.get_rank()
@@ -494,6 +495,7 @@ class SGLangRollout(BaseRollout):
                 # log_requests_level=2,
                 mm_attention_backend="fa3",
                 attention_backend=attention_backend if attention_backend is not None else "fa3",
+                disable_cuda_graph=disable_cuda_graph,
                 # In async mode, we want token in token out.
                 skip_tokenizer_init=self.config.mode == "async",
                 **self.speculative_args,

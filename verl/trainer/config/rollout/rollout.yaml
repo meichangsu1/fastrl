@@ -98,6 +98,7 @@ engine_kwargs:
   sglang:
 
     # The attention backend for sglang engine. Options: flashinfer, triton, flashmla, null for default.
+    disable_cuda_graph: false
     attention_backend: null
 
 # Sampling parameters used during validation.
