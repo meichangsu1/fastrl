@@ -9,6 +9,7 @@ speculative:
   bs_threshold: 32
   eagle:
     spec_model_path: null
+    draft_load_format: null
     spec_steps: 8
     spec_topk: 4
     spec_verify_tokens: 48
