@@ -141,11 +141,17 @@ class EAGLE3BackgroundTrainer:
 
     def _save_checkpoint_async(self, step: int, is_final: bool = False):
         if not self.checkpoint_dir:
+            logger.warning(
+                f"[EAGLE3Trainer rank {self.rank}] Skip checkpoint save at step={step}: checkpoint_path is not set"
+            )
             return None
 
         try:
             checkpoint_path = os.path.join(self.checkpoint_dir, f"eagle3_step_{step}")
             os.makedirs(checkpoint_path, exist_ok=True)
+            logger.info(
+                f"[EAGLE3Trainer rank {self.rank}] Saving {'final ' if is_final else ''}checkpoint to {checkpoint_path}"
+            )
 
             model_state_dict = self._get_trainable_state_dict()
             optimizer_state_dict = self.optimizer.state_dict() if self.optimizer else {}
@@ -559,6 +565,7 @@ class EAGLE3BackgroundTrainer:
             self._pending_checkpoint_future = None
 
         if self.checkpoint_dir and self.model is not None:
+            logger.info(f"[EAGLE3Trainer rank {self.rank}] Triggering final checkpoint save at step={self.training_steps}")
             final_future = self._save_checkpoint_async(self.training_steps, is_final=True)
             if final_future is not None:
                 try:
