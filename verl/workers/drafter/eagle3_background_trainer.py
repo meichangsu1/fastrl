@@ -58,7 +58,8 @@ class EAGLE3BackgroundTrainer:
         self.rank = torch.distributed.get_rank() if torch.distributed.is_initialized() else 0
         logger.info(
             f"[EAGLE3Trainer rank {self.rank}] initialized with "
-            f"base_model_lm_head={'present' if self.base_model_lm_head is not None else 'missing'}"
+            f"base_model_lm_head={'present' if self.base_model_lm_head is not None else 'missing'}, "
+            f"checkpoint_path={self.checkpoint_dir}"
         )
 
         self._training_initialized = False
