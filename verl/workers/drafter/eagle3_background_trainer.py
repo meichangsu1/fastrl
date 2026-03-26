@@ -89,12 +89,13 @@ class EAGLE3BackgroundTrainer:
         """Build a zero-loss placeholder batch so all global FSDP ranks can enter the same step."""
         dev = next(self.model.parameters()).device
         pad_id = int(getattr(self.model_config, "pad_token_id", 0) or 0)
-        hidden_size = int(getattr(self.model.config, "target_hidden_size", self.model.config.hidden_size))
+        target_hidden_size = int(getattr(self.model.config, "target_hidden_size", self.model.config.hidden_size))
+        base_hidden_size = int(getattr(getattr(self.model, "fc", None), "in_features", target_hidden_size))
 
         input_ids = torch.full((1, 1), pad_id, dtype=torch.long, device=dev)
         attention_mask = torch.ones((1, 1), dtype=torch.long, device=dev)
-        hidden_states = torch.zeros((1, 1, hidden_size), dtype=torch.bfloat16, device=dev)
-        target_hidden_states = torch.zeros((1, 1, hidden_size), dtype=torch.bfloat16, device=dev)
+        hidden_states = torch.zeros((1, 1, base_hidden_size), dtype=torch.bfloat16, device=dev)
+        target_hidden_states = torch.zeros((1, 1, target_hidden_size), dtype=torch.bfloat16, device=dev)
         loss_mask = torch.zeros((1, 1), dtype=torch.float32, device=dev)
 
         return {
@@ -343,23 +344,24 @@ class EAGLE3BackgroundTrainer:
         input_ids_concat = torch.cat(input_ids_list, dim=0).unsqueeze(0)
         loss_mask_concat = torch.cat(loss_mask_list, dim=0).unsqueeze(0)
         hidden_states_concat = torch.cat(hidden_states_list, dim=0).unsqueeze(0)
+        base_hidden_states_concat = hidden_states_concat
 
         expected_hidden_dim = int(getattr(self.model.config, "target_hidden_size", self.model.config.hidden_size))
         expected_fc_in_features = getattr(getattr(self.model, "fc", None), "in_features", None)
-        if expected_fc_in_features is not None and hidden_states_concat.size(-1) != expected_fc_in_features:
-            if hidden_states_concat.size(-1) == expected_hidden_dim and expected_fc_in_features == expected_hidden_dim * 3:
+        if expected_fc_in_features is not None and base_hidden_states_concat.size(-1) != expected_fc_in_features:
+            if base_hidden_states_concat.size(-1) == expected_hidden_dim and expected_fc_in_features == expected_hidden_dim * 3:
                 logger.warning(
-                    f"[Rank {self.rank}] Collected single-layer hidden states with dim={hidden_states_concat.size(-1)} "
+                    f"[Rank {self.rank}] Collected single-layer hidden states with dim={base_hidden_states_concat.size(-1)} "
                     f"but drafter fc expects {expected_fc_in_features}. Repeating hidden states 3x as a temporary "
                     "online-training fallback."
                 )
-                hidden_states_concat = torch.cat(
-                    [hidden_states_concat, hidden_states_concat, hidden_states_concat], dim=-1
+                base_hidden_states_concat = torch.cat(
+                    [base_hidden_states_concat, base_hidden_states_concat, base_hidden_states_concat], dim=-1
                 )
             else:
                 logger.warning(
                     f"[Rank {self.rank}] Hidden-state dim mismatch for EAGLE3 batch prep: "
-                    f"got={hidden_states_concat.size(-1)}, expected_fc_in_features={expected_fc_in_features}, "
+                    f"got={base_hidden_states_concat.size(-1)}, expected_fc_in_features={expected_fc_in_features}, "
                     f"target_hidden_size={expected_hidden_dim}"
                 )
         total_seq_len = input_ids_concat.size(1)
@@ -372,12 +374,16 @@ class EAGLE3BackgroundTrainer:
             if pad_size > 0:
                 loss_mask_concat = torch.nn.functional.pad(loss_mask_concat, (0, pad_size), value=0.0)
                 hidden_states_concat = torch.nn.functional.pad(hidden_states_concat, (0, 0, 0, pad_size), value=0.0)
+                base_hidden_states_concat = torch.nn.functional.pad(
+                    base_hidden_states_concat, (0, 0, 0, pad_size), value=0.0
+                )
                 attn_mask = torch.nn.functional.pad(attn_mask, (0, pad_size), value=0)
 
             from verl.utils.ulysses import slice_input_tensor
 
             loss_mask_concat = slice_input_tensor(loss_mask_concat, dim=1, padding=False)
             hidden_states_concat = slice_input_tensor(hidden_states_concat, dim=1, padding=False)
+            base_hidden_states_concat = slice_input_tensor(base_hidden_states_concat, dim=1, padding=False)
             attn_mask = slice_input_tensor(attn_mask, dim=1, padding=False)
             self._current_pad_size = pad_size
         else:
@@ -387,7 +393,7 @@ class EAGLE3BackgroundTrainer:
         loss_mask = loss_mask_concat[:, 1:].contiguous()
         input_ids = input_ids_concat[:, :-1].contiguous()
         attention_mask = attn_mask[:, :-1].contiguous()
-        base_hidden_states = hidden_states_concat[:, :-1].contiguous()
+        base_hidden_states = base_hidden_states_concat[:, :-1].contiguous()
 
         return {
             "input_ids": input_ids,
