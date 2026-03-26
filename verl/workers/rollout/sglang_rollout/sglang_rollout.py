@@ -991,9 +991,12 @@ class SGLangRollout(BaseRollout):
 
         # Global barrier to ensure ALL workers finish current batch before any worker starts next batch
         # This prevents race conditions where fast workers start batch N+1 while slow workers finish batch N
-        logger.info(f"Worker {dist.get_rank()} at barrier, waiting for all workers to complete batch")
-        dist.barrier()
-        logger.info(f"Worker {dist.get_rank()} passed barrier, proceeding to next batch")
+        if self.config.get("enable_global_batch_barrier", True):
+            logger.info(f"Worker {dist.get_rank()} at barrier, waiting for all workers to complete batch")
+            dist.barrier()
+            logger.info(f"Worker {dist.get_rank()} passed barrier, proceeding to next batch")
+        else:
+            logger.info(f"Worker {dist.get_rank()} skipping global batch barrier")
 
         return DataProto(batch=batch, non_tensor_batch=non_tensor_batch)
 

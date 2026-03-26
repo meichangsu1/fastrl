@@ -170,9 +170,10 @@ class EAGLE3BackgroundTrainer:
             self._training_initialized = True
             self._training_active = True
 
-            logger.debug(
+            logger.warning(
                 f"[EAGLE3Trainer rank {getattr(self, 'rank', -1)}] activate_training_model success "
-                f"elapsed={time.time() - start_ts:.2f}s"
+                f"elapsed={time.time() - start_ts:.2f}s "
+                f"base_model_lm_head={'present' if self.base_model_lm_head is not None else 'missing'}"
             )
             return True
         except Exception as e:
@@ -406,6 +407,7 @@ class EAGLE3BackgroundTrainer:
 
     async def training_step(self, step: int) -> bool:
         try:
+            logger.warning(f"[EAGLE3Trainer rank {self.rank}] training_step enter step={step}")
             with torch.enable_grad():
                 return await self._training_step_impl(step)
         except Exception as e:  # noqa: BLE001

@@ -43,6 +43,11 @@ cudagraph_capture_sizes: null
 # Whether to free engine KVCache after generation.
 free_cache_engine: True
 
+# Whether to enforce a global distributed barrier after each rollout batch.
+# Useful for strict batch-to-batch synchronization, but can hide the real source
+# of hangs when some workers do not reach the barrier.
+enable_global_batch_barrier: True
+
 # TP size for rollout. Not effective for hf
 tensor_model_parallel_size: 2
 

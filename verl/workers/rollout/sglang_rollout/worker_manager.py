@@ -438,6 +438,9 @@ class RolloutDrafterManager:
         # Coordinator setup
         self.coordinator = None
         self.worker_client = None
+        self._listener_worker_client = None
+        self._req_address = None
+        self._pub_address = None
         self.is_coordinator = self.rank == 0
         self._coord_thread: Optional[threading.Thread] = None
 
@@ -535,6 +538,8 @@ class RolloutDrafterManager:
         addresses = [req_address, pub_address]
         dist.broadcast_object_list(addresses, src=0)
         req_address, pub_address = addresses
+        self._req_address = req_address
+        self._pub_address = pub_address
 
         # Create worker client
         self.worker_client = WorkerClient(req_address, pub_address, self.rank)
@@ -566,13 +571,15 @@ class RolloutDrafterManager:
         # Create a new event loop for this thread
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
+        listener_worker_client = WorkerClient(self._req_address, self._pub_address, self.rank)
+        self._listener_worker_client = listener_worker_client
 
         check_counter = 0
 
         while self._event_listener_running:
             try:
                 # Check for broadcasts (non-blocking with timeout)
-                command = loop.run_until_complete(self.worker_client.wait_for_event(timeout=0.5))
+                command = loop.run_until_complete(listener_worker_client.wait_for_event(timeout=0.5))
 
                 if command is None:
                     # No broadcast, do periodic state check every 2.5 seconds
@@ -580,7 +587,7 @@ class RolloutDrafterManager:
                     if check_counter >= 5:
                         check_counter = 0
                         if not self._training_active:
-                            loop.run_until_complete(self._check_training_state_sync(loop))
+                            loop.run_until_complete(self._check_training_state_sync(listener_worker_client))
                     time.sleep(0.001)  # Reduced from 0.01 to 0.001 for faster response
                     continue
 
@@ -608,10 +615,10 @@ class RolloutDrafterManager:
         logger.info(f"Worker {self.rank} event listener thread exiting")
         loop.close()
 
-    async def _check_training_state_sync(self, loop):
+    async def _check_training_state_sync(self, worker_client: WorkerClient):
         """Check coordinator state and start training if needed (runs in event listener thread)."""
         try:
-            response = await self.worker_client.get_state()
+            response = await worker_client.get_state()
             if response["status"] != "ok":
                 return
 
@@ -716,7 +723,7 @@ class RolloutDrafterManager:
 
     async def _run_training_loop(self):
         """Simple linear training loop."""
-        logger.debug(f"Worker {self.rank} training loop started")
+        logger.info(f"Worker {self.rank} training loop started")
 
         try:
             step = 0
@@ -738,16 +745,17 @@ class RolloutDrafterManager:
                     self.background_trainer.training_step(step),
                     timeout=20.0,
                 )
+                logger.info(f"Worker {self.rank} training_step finished step={step} success={success}")
 
                 step += 1
                 if success:
                     step += 1
                 else:
-                    logger.debug(f"Worker {self.rank} training is not ready at step {step}")
+                    logger.info(f"Worker {self.rank} training is not ready at step {step}")
 
                 await asyncio.sleep(0.02)
 
-            logger.debug(f"Worker {self.rank} training loop completed: {step} steps")
+            logger.info(f"Worker {self.rank} training loop completed: {step} steps")
 
         except Exception as e:
             logger.exception(f"Worker {self.rank} training loop error: {e}")
