@@ -88,8 +88,9 @@ from verl.utils.torch_functional import (
     get_linear_schedule_with_warmup,
 )
 from verl.workers.config import FSDPCriticConfig, FSDPEngineConfig
+from verl.workers.drafter.eagle3_background_trainer import EAGLE3BackgroundTrainer
 from verl.workers.drafter.eagle_background_trainer import EagleBackgroundTrainer
-from verl.workers.drafter.model import LlamaForCausalLMEagle, Qwen2ForCausalLMEagle
+from verl.workers.drafter.model import LlamaForCausalLMEagle, LlamaModelEagle3, Qwen2ForCausalLMEagle
 from verl.workers.sharding_manager.fsdp_ulysses import FSDPUlyssesShardingManager
 
 logger = logging.getLogger(__file__)
@@ -482,11 +483,7 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
         log_gpu_memory_usage("Before building drafter model", logger=logger)
 
         infer_tp = self.config.rollout.tensor_model_parallel_size
-        dp_size = self.world_size // infer_tp
-        self.global_device_mesh_list = [
-            DeviceMesh("cuda", list(range(i * infer_tp, (i + 1) * infer_tp))) for i in range(dp_size)
-        ]
-        self.drafter_device_mesh = self.global_device_mesh_list[self.rollout_dp_rank]
+        eagle_cfg = None
 
         # Use defensive access for speculative eagle config
         if (
@@ -494,30 +491,28 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
             and hasattr(self.config.rollout.speculative, "eagle")
             and hasattr(self.config.rollout.speculative.eagle, "spec_model_path")
         ):
-            spec_model_path = self.config.rollout.speculative.eagle.spec_model_path
+            eagle_cfg = self.config.rollout.speculative.eagle
+            spec_model_path = eagle_cfg.spec_model_path
         else:
             raise ValueError("Speculative eagle config is missing or incomplete: spec_model_path not found")
         config = deepcopy(self.actor_model_config)
         config.num_hidden_layers = 1
         config.torch_dtype = torch.bfloat16
         config.tie_word_embeddings = False
-        # Add Eagle3 specific config
-        # config.draft_vocab_size = self.args.draft_vocab_size
+        spec_strategy = str(self.config.rollout.speculative.get("spec_strategy", "eagle")).upper()
 
-        # Get model type from config
-        model_type = getattr(config, "model_type", "llama")
-
-        # Import appropriate eagle model class
-        if model_type.lower() == "llama":
-            model_class = LlamaForCausalLMEagle
-        elif model_type.lower() == "qwen2":
-            model_class = Qwen2ForCausalLMEagle
+        if spec_strategy == "EAGLE3":
+            # Train one global Eagle3 drafter across all rollout ranks so every rollout shard
+            # hot-syncs the same weights back into its local SGLang engine.
+            self.drafter_device_mesh = DeviceMesh("cuda", list(range(self.world_size)))
         else:
-            raise ValueError(f"Unsupported model type for eagle: {model_type}")
+            dp_size = self.world_size // infer_tp
+            self.global_device_mesh_list = [
+                DeviceMesh("cuda", list(range(i * infer_tp, (i + 1) * infer_tp))) for i in range(dp_size)
+            ]
+            self.drafter_device_mesh = self.global_device_mesh_list[self.rollout_dp_rank]
 
-        drafter_module = model_class(config=config).cuda()
-
-        # Initialize eagle model
+        state = {}
         if spec_model_path and os.path.exists(spec_model_path):
             logger.info(f"Loading eagle model from checkpoint: {spec_model_path}")
             allow_patterns = ["*.safetensors", "*.bin", "*.pt"]
@@ -530,42 +525,129 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
                         use_safetensors = True
                     break
 
-            state = {}
             if use_safetensors:
-                # Load from safetensors files
                 for file in hf_weights_files:
                     with safetensors.safe_open(file, framework="pt", device="cpu") as f:
                         for name in f.keys():
                             state[name] = f.get_tensor(name)
             else:
-                # Load from bin/pt files
                 for file in hf_weights_files:
                     file_state = torch.load(file, map_location="cpu", weights_only=True)
                     state.update(file_state)
 
-            renamed_checkpoint = {}
+        eagle3_vocab_mapping = None
+        if spec_strategy == "EAGLE3":
+            d2t = state.get("d2t", state.get("model.d2t"))
+            t2d = state.get("t2d", state.get("model.t2d"))
+            lm_head_weight = state.get("lm_head.weight", state.get("model.lm_head.weight"))
+            fc_weight = state.get("fc.weight", state.get("model.fc.weight"))
+
+            freq_map_path = getattr(eagle_cfg, "freq_map_path", None)
+            if d2t is None and freq_map_path:
+                if not os.path.exists(freq_map_path):
+                    raise ValueError(f"EAGLE3 freq_map_path does not exist: {freq_map_path}")
+                mapping_data = torch.load(freq_map_path, map_location="cpu", weights_only=True)
+                d2t = mapping_data.get("d2t")
+                t2d = mapping_data.get("t2d")
+                logger.info(f"Loaded EAGLE3 vocab mapping from: {freq_map_path}")
+
+            if d2t is None:
+                # Cold-start fallback: use the full target vocab as the draft vocab.
+                vocab_size = int(config.vocab_size)
+                d2t = torch.arange(vocab_size, dtype=torch.long)
+                t2d = torch.ones(vocab_size, dtype=torch.bool)
+                logger.warning(
+                    "EAGLE3 cold start without checkpoint/freq_map_path: using identity vocab mapping "
+                    f"(draft_vocab_size={vocab_size})"
+                )
+            elif t2d is None:
+                t2d = torch.zeros(int(config.vocab_size), dtype=torch.bool)
+                valid_d2t = d2t[(d2t >= 0) & (d2t < int(config.vocab_size))].to(dtype=torch.long)
+                t2d[valid_d2t] = True
+
+            eagle3_vocab_mapping = {
+                "d2t": d2t.to(dtype=torch.long),
+                "t2d": t2d.to(dtype=torch.bool),
+            }
+            config.draft_vocab_size = int(eagle3_vocab_mapping["d2t"].shape[0])
+
+            if fc_weight is not None:
+                hidden_size_in = int(fc_weight.shape[1] // 3)
+                if hidden_size_in != int(config.hidden_size):
+                    config.target_hidden_size = hidden_size_in
+
+        # Get model type from config
+        model_type = getattr(config, "model_type", "llama")
+
+        # Import appropriate eagle model class
+        if spec_strategy == "EAGLE3":
+            if model_type.lower() != "llama":
+                raise ValueError(
+                    f"EAGLE3 online RL currently only supports llama draft model hot-sync, got model_type={model_type}"
+                )
+            model_class = LlamaModelEagle3
+        else:
+            if model_type.lower() == "llama":
+                model_class = LlamaForCausalLMEagle
+            elif model_type.lower() == "qwen2":
+                model_class = Qwen2ForCausalLMEagle
+            else:
+                raise ValueError(f"Unsupported model type for eagle: {model_type}")
+
+        drafter_module = model_class(config=config).cuda()
+
+        # Initialize eagle model
+        renamed_checkpoint = {}
+        if state:
             for key, value in state.items():
-                if not key.startswith("model.") and not key.startswith("lm_head"):
-                    renamed_checkpoint[f"model.{key}"] = value
+                if spec_strategy == "EAGLE3":
+                    if key.startswith("model."):
+                        renamed_checkpoint[key[len("model."):]] = value
+                    else:
+                        renamed_checkpoint[key] = value
                 else:
-                    renamed_checkpoint[key] = value
-            del state
+                    if not key.startswith("model.") and not key.startswith("lm_head"):
+                        renamed_checkpoint[f"model.{key}"] = value
+                    else:
+                        renamed_checkpoint[key] = value
 
             drafter_module.load_state_dict(renamed_checkpoint, strict=False)
         else:
             logger.info("Initialized eagle model from scratch")
 
+        if eagle3_vocab_mapping is not None:
+            drafter_module.d2t.copy_(eagle3_vocab_mapping["d2t"].to(device=drafter_module.d2t.device))
+            drafter_module.t2d.copy_(eagle3_vocab_mapping["t2d"].to(device=drafter_module.t2d.device))
+
         base_module = self.actor_module_fsdp.unshard()
+        base_model_lm_head = None
         if hasattr(base_module, "lm_head"):
-            drafter_module.lm_head = base_module.lm_head
-            for param in drafter_module.lm_head.parameters():
-                param.requires_grad = False
-            logger.info("Successfully load lm_head for drafter model")
+            if spec_strategy == "EAGLE3":
+                base_model_lm_head = deepcopy(base_module.lm_head).to(dtype=torch.bfloat16)
+                for param in base_model_lm_head.parameters():
+                    param.requires_grad = False
+
+                if "lm_head.weight" not in renamed_checkpoint and "model.lm_head.weight" not in renamed_checkpoint:
+                    hot_token_id = drafter_module.d2t + torch.arange(
+                        drafter_module.d2t.shape[0], device=drafter_module.d2t.device, dtype=drafter_module.d2t.dtype
+                    )
+                    drafter_module.lm_head.weight.data.copy_(base_module.lm_head.weight.data[hot_token_id])
+                logger.info("Successfully initialized draft/base lm_head for Eagle3 drafter")
+            else:
+                drafter_module.lm_head = base_module.lm_head
+                for param in drafter_module.lm_head.parameters():
+                    param.requires_grad = False
+                logger.info("Successfully load lm_head for drafter model")
 
         if hasattr(base_module, "model") and hasattr(base_module.model, "embed_tokens"):
-            drafter_module.model.embed_tokens = base_module.model.embed_tokens
-            for param in drafter_module.model.embed_tokens.parameters():
-                param.requires_grad = False
+            if spec_strategy == "EAGLE3":
+                drafter_module.embed_tokens = base_module.model.embed_tokens
+                for param in drafter_module.embed_tokens.parameters():
+                    param.requires_grad = False
+            else:
+                drafter_module.model.embed_tokens = base_module.model.embed_tokens
+                for param in drafter_module.model.embed_tokens.parameters():
+                    param.requires_grad = False
             logger.info("Successfully load embed_tokens for drafter model")
 
         del base_module
@@ -597,6 +679,7 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
                 {
                     "spec_strategy": rollout_config.speculative.spec_strategy,
                     "spec_model_path": rollout_config.speculative.eagle.spec_model_path,
+                    "freq_map_path": getattr(rollout_config.speculative.eagle, "freq_map_path", None),
                     "is_offload_optimizer": self._is_offload_optimizer,
                     "is_offload_param": self._is_offload_param,
                     "vloss_weight": 1.0,
@@ -647,7 +730,7 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
 
         log_gpu_memory_usage("After building drafter model", logger=logger)
 
-        return drafter_module_fsdp, drafter_optimizer, drafter_lr_scheduler, drafter_train_config
+        return drafter_module_fsdp, drafter_optimizer, drafter_lr_scheduler, drafter_train_config, base_model_lm_head
 
     def _build_rollout(self, trust_remote_code=False):
         from torch.distributed.device_mesh import init_device_mesh
@@ -677,6 +760,7 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
                 drafter_optimizer,
                 drafter_lr_scheduler,
                 drafter_train_config,
+                base_model_lm_head,
             ) = self._build_drafter_model()
 
             if self._is_offload_param:
@@ -786,13 +870,21 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
             raise NotImplementedError(f"Rollout name: {self.config.rollout.name} is not supported")
 
         if enable_drafter_training:
-            rollout.drafter_manager.background_trainer = EagleBackgroundTrainer(
+            spec_strategy = str(self.config.rollout.speculative.get("spec_strategy", "eagle")).upper()
+            trainer_cls = EAGLE3BackgroundTrainer if spec_strategy == "EAGLE3" else EagleBackgroundTrainer
+            trainer_kwargs = {
+                "model_config": self.actor_model_config,
+            }
+            if spec_strategy == "EAGLE3":
+                trainer_kwargs["base_model_lm_head"] = base_model_lm_head
+
+            rollout.drafter_manager.background_trainer = trainer_cls(
                 drafter_module_fsdp,
                 drafter_optimizer,
                 drafter_lr_scheduler,
                 drafter_train_config,
                 self.drafter_device_mesh,
-                model_config=self.actor_model_config,  # Pass the model config for padding token id etc.
+                **trainer_kwargs,
             )
             # Update sharding manager with eagle module
             rollout_sharding_manager.drafter_module = drafter_module_fsdp

@@ -38,6 +38,7 @@ from verl.utils.fsdp_utils import (
     apply_fsdp2,
     fsdp2_load_full_state_dict,
     fsdp_version,
+    get_fsdp_full_state_dict,
     get_fsdp_wrap_policy,
     get_init_weight_context_manager,
     get_shard_placement_fn,
@@ -244,14 +245,19 @@ class FSDPSGLangShardingManager(BaseShardingManager):
             # if self.offload_param:
             #     load_fsdp_model_to_gpu(self.drafter_module)
 
-            drafter_params = self.drafter_module.state_dict()
+            drafter_module_unwrapped = getattr(self.drafter_module, "_fsdp_wrapped_module", self.drafter_module)
+            if drafter_module_unwrapped.__class__.__name__ == "LlamaModelEagle3":
+                drafter_params = get_fsdp_full_state_dict(
+                    self.drafter_module, offload_to_cpu=False, rank0_only=False
+                )
+            else:
+                drafter_params = self.drafter_module.state_dict()
             drafter_params = {
                 k: v.to(device, non_blocking=True) if fsdp_version(self.drafter_module) == 2 else v
                 for k, v in drafter_params.items()
             }
 
             # Convert weight keys to match the drafter model config
-            drafter_module_unwrapped = getattr(self.drafter_module, "_fsdp_wrapped_module", self.drafter_module)
             drafter_params = convert_weight_keys(drafter_params, drafter_module_unwrapped)
 
             if self.offload_param:

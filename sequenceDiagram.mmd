@@ -1,0 +1,80 @@
+sequenceDiagram
+    autonumber
+    participant S as train_eagle3.sh
+    participant D as DeepSpeed Launcher
+    participant M as eagle3_trainer.main()
+    participant T as Eagle3TrainerDeepSpeed
+    participant F as freq_map(d2t/t2d)
+    participant B as Base Model Weights
+    participant DS as Train Dataset(.pt/.ckpt)
+    participant C as EagleDataCollator
+    participant H as Frozen Base LM Head
+    participant E as Eagle3 Draft Model
+    participant O as DeepSpeed Optimizer
+    participant W as Tracking/WandB
+    participant V as Val Loader
+    participant K as Checkpoint
+
+    S->>D: deepspeed eagle3_trainer.py ...
+    D->>M: parse args + init_distributed()
+    M->>T: new Eagle3TrainerDeepSpeed(args)
+
+    T->>F: load d2t/t2d vocab mapping
+    alt use_target_model=True
+        T->>B: load tokenizer + target_model(eval,frozen)
+    end
+
+    T->>DS: scan data_path, collect files, split train/val(95/5)
+    T->>E: build Eagle3 model config(num_hidden_layers=1, draft_vocab_size)
+    T->>B: load embed_tokens + lm_head weights
+    B-->>E: init embed / mapped draft lm_head
+    T->>E: freeze embed_tokens
+    alt use_target_model=False (current default)
+        T->>H: build frozen base_model_lm_head
+    end
+
+    T->>D: deepspeed.initialize(model, train_dataset, collator)
+    T->>K: try load latest checkpoint
+    M->>T: train()
+
+    loop each epoch
+        loop each batch
+            D->>DS: __getitem__()
+            alt current default offline hidden-state mode
+                DS-->>D: input_ids, hidden_states, last_hidden_states, loss_mask
+            else online target model mode
+                DS->>B: generate hidden_states from target_model
+                DS-->>D: input_ids, hidden_states, loss_mask
+            end
+            D->>C: collate + pad
+            C-->>T: batch(input_ids, hidden_states, attention_mask, loss_mask, ...)
+
+            T->>T: move batch to CUDA / cast dtype
+            T->>T: _compute_loss(batch)
+
+            alt current default offline hidden-state mode
+                T->>H: last_hidden_states -> target_logits
+                H-->>T: target_logits
+                T->>T: right-shift padding(target_logits)
+            else online target model mode
+                T->>B: full_input_ids -> target logits
+                B-->>T: target_logits
+            end
+
+            T->>E: forward(hidden_states,input_ids,attention_mask,target,prediction_length)
+            E-->>T: loss_list, accuracy_list
+            T->>T: total_loss = sum((0.8^i) * loss_i)
+            T->>O: backward(total_loss)
+            O->>E: optimizer step
+            T->>W: log train metrics
+
+            opt save_steps hit
+                T->>K: save_checkpoint(step)
+            end
+        end
+
+        T->>V: run validation
+        V->>E: same forward path, no grad
+        T->>W: log val metrics
+        T->>K: save_checkpoint(epoch)
+    end
