@@ -289,6 +289,7 @@ class SGLangRollout(BaseRollout):
             self.speculative_args = {
                 "speculative_algorithm": self.config.speculative.spec_strategy,
                 "speculative_draft_model_path": self.config.speculative.eagle.spec_model_path,
+                "speculative_draft_load_format": self.config.speculative.eagle.get("draft_load_format", None),
                 "speculative_num_steps": self.config.speculative.eagle.spec_steps,
                 "speculative_eagle_topk": self.config.speculative.eagle.spec_topk,
                 "speculative_num_draft_tokens": self.config.speculative.eagle.spec_verify_tokens,
