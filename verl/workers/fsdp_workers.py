@@ -708,10 +708,10 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
                     drafter_module.lm_head.weight.data.copy_(base_module.lm_head.weight.data[hot_token_id])
                 logger.info("Successfully initialized draft/base lm_head for Eagle3 drafter")
             else:
-                drafter_module.lm_head = base_module.lm_head
+                drafter_module.lm_head.weight.data.copy_(base_module.lm_head.weight.data)
                 for param in drafter_module.lm_head.parameters():
                     param.requires_grad = False
-                logger.info("Successfully load lm_head for drafter model")
+                logger.info("Successfully copied lm_head weights for drafter model")
         else:
             logger.warning(
                 f"Base module {base_module.__class__.__name__} does not expose lm_head; "
@@ -720,14 +720,14 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
 
         if hasattr(base_module, "model") and hasattr(base_module.model, "embed_tokens"):
             if spec_strategy == "EAGLE3":
-                drafter_module.embed_tokens = base_module.model.embed_tokens
+                drafter_module.embed_tokens.weight.data.copy_(base_module.model.embed_tokens.weight.data)
                 for param in drafter_module.embed_tokens.parameters():
                     param.requires_grad = False
             else:
-                drafter_module.model.embed_tokens = base_module.model.embed_tokens
+                drafter_module.model.embed_tokens.weight.data.copy_(base_module.model.embed_tokens.weight.data)
                 for param in drafter_module.model.embed_tokens.parameters():
                     param.requires_grad = False
-            logger.info("Successfully load embed_tokens for drafter model")
+            logger.info("Successfully copied embed_tokens weights for drafter model")
 
         if spec_strategy == "EAGLE3":
             logger.info(
