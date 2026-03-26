@@ -507,6 +507,24 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
         config.tie_word_embeddings = False
         spec_strategy = str(self.config.rollout.speculative.get("spec_strategy", "eagle")).upper()
 
+        def _materialize_tensor(tensor: torch.Tensor, *, device=None, dtype=None) -> torch.Tensor:
+            materialized = tensor
+            if hasattr(materialized, "full_tensor"):
+                materialized = materialized.full_tensor()
+            elif hasattr(materialized, "to_local"):
+                materialized = materialized.to_local()
+            materialized = materialized.detach()
+            if device is not None or dtype is not None:
+                materialized = materialized.to(device=device, dtype=dtype)
+            return materialized
+
+        def _materialize_module_(module: torch.nn.Module, *, device=None, dtype=None) -> torch.nn.Module:
+            for _, param in module.named_parameters(recurse=True):
+                param.data = _materialize_tensor(param.data, device=device, dtype=dtype)
+            for _, buf in module.named_buffers(recurse=True):
+                buf.data = _materialize_tensor(buf.data, device=device, dtype=dtype)
+            return module
+
         if spec_strategy == "EAGLE3":
             # Train one global Eagle3 drafter across all rollout ranks so every rollout shard
             # hot-syncs the same weights back into its local SGLang engine.
@@ -690,25 +708,37 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
         base_model_lm_head = None
         if hasattr(base_module, "lm_head"):
             if spec_strategy == "EAGLE3":
-                base_model_lm_head = deepcopy(base_module.lm_head).to(dtype=torch.bfloat16)
+                base_model_lm_head = _materialize_module_(
+                    deepcopy(base_module.lm_head), device=get_device_name(), dtype=torch.bfloat16
+                )
                 for param in base_model_lm_head.parameters():
                     param.requires_grad = False
 
                 if "lm_head.weight" not in renamed_checkpoint and "model.lm_head.weight" not in renamed_checkpoint:
+                    base_lm_head_weight = _materialize_tensor(
+                        base_module.lm_head.weight.data,
+                        device=drafter_module.lm_head.weight.device,
+                        dtype=drafter_module.lm_head.weight.dtype,
+                    )
                     hot_token_id = drafter_module.d2t + torch.arange(
                         drafter_module.d2t.shape[0], device=drafter_module.d2t.device, dtype=drafter_module.d2t.dtype
                     )
-                    if torch.any(hot_token_id < 0) or torch.any(hot_token_id >= base_module.lm_head.weight.shape[0]):
+                    if torch.any(hot_token_id < 0) or torch.any(hot_token_id >= base_lm_head_weight.shape[0]):
                         logger.warning(
                             "Computed hot_token_id contains out-of-range indices during drafter lm_head init: "
                             f"min={hot_token_id.min().item()}, max={hot_token_id.max().item()}, "
-                            f"base_vocab={base_module.lm_head.weight.shape[0]}, "
+                            f"base_vocab={base_lm_head_weight.shape[0]}, "
                             f"d2t_min={drafter_module.d2t.min().item()}, d2t_max={drafter_module.d2t.max().item()}"
                         )
-                    drafter_module.lm_head.weight.data.copy_(base_module.lm_head.weight.data[hot_token_id])
+                    drafter_module.lm_head.weight.data.copy_(base_lm_head_weight[hot_token_id])
                 logger.info("Successfully initialized draft/base lm_head for Eagle3 drafter")
             else:
-                drafter_module.lm_head.weight.data.copy_(base_module.lm_head.weight.data)
+                base_lm_head_weight = _materialize_tensor(
+                    base_module.lm_head.weight.data,
+                    device=drafter_module.lm_head.weight.device,
+                    dtype=drafter_module.lm_head.weight.dtype,
+                )
+                drafter_module.lm_head.weight.data.copy_(base_lm_head_weight)
                 for param in drafter_module.lm_head.parameters():
                     param.requires_grad = False
                 logger.info("Successfully copied lm_head weights for drafter model")
@@ -720,11 +750,21 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
 
         if hasattr(base_module, "model") and hasattr(base_module.model, "embed_tokens"):
             if spec_strategy == "EAGLE3":
-                drafter_module.embed_tokens.weight.data.copy_(base_module.model.embed_tokens.weight.data)
+                base_embed_weight = _materialize_tensor(
+                    base_module.model.embed_tokens.weight.data,
+                    device=drafter_module.embed_tokens.weight.device,
+                    dtype=drafter_module.embed_tokens.weight.dtype,
+                )
+                drafter_module.embed_tokens.weight.data.copy_(base_embed_weight)
                 for param in drafter_module.embed_tokens.parameters():
                     param.requires_grad = False
             else:
-                drafter_module.model.embed_tokens.weight.data.copy_(base_module.model.embed_tokens.weight.data)
+                base_embed_weight = _materialize_tensor(
+                    base_module.model.embed_tokens.weight.data,
+                    device=drafter_module.model.embed_tokens.weight.device,
+                    dtype=drafter_module.model.embed_tokens.weight.dtype,
+                )
+                drafter_module.model.embed_tokens.weight.data.copy_(base_embed_weight)
                 for param in drafter_module.model.embed_tokens.parameters():
                     param.requires_grad = False
             logger.info("Successfully copied embed_tokens weights for drafter model")
