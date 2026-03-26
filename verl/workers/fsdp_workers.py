@@ -892,6 +892,7 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
 
         if enable_drafter_training:
             spec_strategy = str(self.config.rollout.speculative.get("spec_strategy", "eagle")).upper()
+            enable_spec_inference = bool(self.config.rollout.speculative.get("enable_inference", True))
             trainer_cls = EAGLE3BackgroundTrainer if spec_strategy == "EAGLE3" else EagleBackgroundTrainer
             trainer_kwargs = {
                 "model_config": self.actor_model_config,
@@ -907,8 +908,9 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
                 self.drafter_device_mesh,
                 **trainer_kwargs,
             )
-            # Update sharding manager with eagle module
-            rollout_sharding_manager.drafter_module = drafter_module_fsdp
+            # Only hot-sync draft weights into the inference engine when speculative inference is enabled.
+            if enable_spec_inference:
+                rollout_sharding_manager.drafter_module = drafter_module_fsdp
 
         return rollout, rollout_sharding_manager
 
