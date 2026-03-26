@@ -69,6 +69,7 @@ class WorkerInfo:
     tp_rank: int
     state: WorkerState
     last_update: float = 0.0
+    memory_released: bool = False
 
 
 class CoordinatorEvent(Enum):
@@ -179,6 +180,7 @@ class CentralCoordinator:
             if worker_id in self.worker_states:
                 self.worker_states[worker_id].state = WorkerState.GENERATING
                 self.worker_states[worker_id].last_update = time.time()
+                self.worker_states[worker_id].memory_released = False
             return {"status": "ok"}
 
         elif request_type == "release":
@@ -193,6 +195,7 @@ class CentralCoordinator:
                 if winfo.dp_rank == dp_rank:
                     self.worker_states[wid].state = WorkerState.RELEASED
                     self.worker_states[wid].last_update = time.time()
+                    self.worker_states[wid].memory_released = True
 
             logger.info(f"Worker {worker_id} (DP={dp_rank}) released all TP ranks")
 
@@ -253,7 +256,7 @@ class CentralCoordinator:
         # Count released DP workers
         released_dp_ranks = set()
         for winfo in self.worker_states.values():
-            if winfo.state == WorkerState.RELEASED:
+            if winfo.memory_released:
                 released_dp_ranks.add(winfo.dp_rank)
 
         logger.info(
