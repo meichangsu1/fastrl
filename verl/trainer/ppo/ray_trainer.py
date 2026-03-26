@@ -1225,8 +1225,8 @@ class RayPPOTrainer:
                             hidden_states = old_log_prob.meta_info.pop("hidden_states")
                             try:
                                 self.actor_rollout_wg.add_drafter_data_to_buffer(batch, hidden_states)
-                            except Exception as e:
-                                logger.warning(f"Failed to add drafter data to buffer: {e}")
+                            except Exception:
+                                logger.exception("Failed to add drafter data to buffer")
 
                         # Clean up meta_info
                         if "return_hidden_states" in batch.meta_info:

@@ -54,6 +54,7 @@ class EAGLE3BackgroundTrainer:
 
         self.is_offload_param = self.config.get("is_offload_param", False)
         self.is_offload_optimizer = self.config.get("is_offload_optimizer", False)
+        self.checkpoint_dir = self.config.get("checkpoint_path")
 
         self.rank = torch.distributed.get_rank() if torch.distributed.is_initialized() else 0
         logger.info(
@@ -74,7 +75,6 @@ class EAGLE3BackgroundTrainer:
         collect_hidden_states_from_sgl = bool(self.config.get("collect_hidden_states_from_sgl", False))
         self.data_buffer = DataBuffer(max_size=buffer_max_size, store_hidden_states=collect_hidden_states_from_sgl)
 
-        self.checkpoint_dir = self.config.get("checkpoint_path")
         self._last_ckpt_step = -1
         self.enable_mesh_barrier = bool(self.config.get("enable_step_barrier", False))
         self._pending_checkpoint_future = None

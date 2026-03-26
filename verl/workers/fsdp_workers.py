@@ -127,6 +127,53 @@ def get_sharding_strategy(device_mesh):
     return sharding_strategy
 
 
+def _chunk_list_equal(items: list, chunks: int) -> list[list]:
+    assert len(items) % chunks == 0, f"only support equal chunk. Got list size {len(items)} and chunk {chunks}."
+    chunk_size = len(items) // chunks
+    return [items[i * chunk_size : (i + 1) * chunk_size] for i in range(chunks)]
+
+
+def make_nd_compute_dataproto_with_list_dispatch_fn(mesh_name):
+    def dispatch_fn(worker_group, *args, **kwargs):
+        import ray
+
+        from verl.protocol import DataProto, DataProtoFuture
+        from verl.single_controller.base.worker_group import WorkerGroup
+
+        assert isinstance(worker_group, WorkerGroup)
+        assert len(args) == 2 and not kwargs, "Expected exactly (DataProto, list) for drafter buffer dispatch"
+        batch, hidden_states = args
+        assert isinstance(batch, DataProto | DataProtoFuture)
+        assert isinstance(hidden_states, list)
+
+        if mesh_name not in worker_group._dispatch_info:
+            worker_group._dispatch_info[mesh_name] = worker_group._query_dispatch_info(mesh_name)
+            assert len(worker_group._dispatch_info[mesh_name]) == worker_group.world_size
+
+        dp_rank_mapping = worker_group._dispatch_info[mesh_name]
+        dp_size = max(dp_rank_mapping) + 1
+
+        batch_chunks = batch.chunk(chunks=dp_size)
+        hidden_states_chunks = _chunk_list_equal(hidden_states, dp_size)
+
+        batch_refs = [ray.put(chunk) for chunk in batch_chunks]
+        hidden_state_refs = [ray.put(chunk) for chunk in hidden_states_chunks]
+
+        all_batch_args = []
+        all_hidden_state_args = []
+        for global_rank in range(worker_group.world_size):
+            local_dp_rank = dp_rank_mapping[global_rank]
+            all_batch_args.append(batch_refs[local_dp_rank])
+            all_hidden_state_args.append(hidden_state_refs[local_dp_rank])
+
+        return (all_batch_args, all_hidden_state_args), {}
+
+    def collect_fn(worker_group, output):
+        return output
+
+    return {"dispatch_fn": dispatch_fn, "collect_fn": collect_fn}
+
+
 class ActorRolloutRefWorker(Worker, DistProfilerExtension):
     """
     This worker can be instantiated as a standalone actor or a standalone rollout or a standalone reference policy
@@ -1406,21 +1453,15 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
         if self._is_offload_optimizer:
             offload_fsdp_optimizer(self.actor_optimizer)
 
-    @register(dispatch_mode=make_nd_compute_dataproto_dispatch_fn(mesh_name="actor"))
+    @register(dispatch_mode=make_nd_compute_dataproto_with_list_dispatch_fn(mesh_name="actor"))
     def add_drafter_data_to_buffer(self, batch: DataProto, hidden_states: list) -> None:
         """Add collected data with hidden states to the drafter's DataBuffer.
 
         This is called during the compute_log_prob phase to collect training data for the Eagle drafter model.
         """
-        # Only proceed if we have a drafter manager with background trainer
-        if not hasattr(self, "ulysses_sharding_manager") or self.ulysses_sharding_manager is None:
+        if not hidden_states:
             return
 
-        sharding_mgr = self.ulysses_sharding_manager
-        if not hasattr(sharding_mgr, "drafter_module") or sharding_mgr.drafter_module is None:
-            return
-
-        # Get the drafter manager from rollout (if using hybrid engine)
         if hasattr(self, "rollout") and hasattr(self.rollout, "drafter_manager"):
             drafter_manager = self.rollout.drafter_manager
             if drafter_manager is not None and hasattr(drafter_manager, "background_trainer"):
