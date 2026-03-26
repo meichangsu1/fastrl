@@ -559,8 +559,9 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
 
             if d2t is None:
                 # Cold-start fallback: use the full target vocab as the draft vocab.
+                # d2t stores diffs between draft id and target id, so identity mapping is all zeros.
                 vocab_size = int(config.vocab_size)
-                d2t = torch.arange(vocab_size, dtype=torch.long)
+                d2t = torch.zeros(vocab_size, dtype=torch.long)
                 t2d = torch.ones(vocab_size, dtype=torch.bool)
                 logger.warning(
                     "EAGLE3 cold start without checkpoint/freq_map_path: using identity vocab mapping "
@@ -568,8 +569,12 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
                 )
             elif t2d is None:
                 t2d = torch.zeros(int(config.vocab_size), dtype=torch.bool)
-                valid_d2t = d2t[(d2t >= 0) & (d2t < int(config.vocab_size))].to(dtype=torch.long)
-                t2d[valid_d2t] = True
+                draft_ids = torch.arange(d2t.shape[0], dtype=d2t.dtype)
+                target_ids = d2t + draft_ids
+                valid_target_ids = target_ids[(target_ids >= 0) & (target_ids < int(config.vocab_size))].to(
+                    dtype=torch.long
+                )
+                t2d[valid_target_ids] = True
 
             eagle3_vocab_mapping = {
                 "d2t": d2t.to(dtype=torch.long),
@@ -693,6 +698,13 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
                     hot_token_id = drafter_module.d2t + torch.arange(
                         drafter_module.d2t.shape[0], device=drafter_module.d2t.device, dtype=drafter_module.d2t.dtype
                     )
+                    if torch.any(hot_token_id < 0) or torch.any(hot_token_id >= base_module.lm_head.weight.shape[0]):
+                        logger.warning(
+                            "Computed hot_token_id contains out-of-range indices during drafter lm_head init: "
+                            f"min={hot_token_id.min().item()}, max={hot_token_id.max().item()}, "
+                            f"base_vocab={base_module.lm_head.weight.shape[0]}, "
+                            f"d2t_min={drafter_module.d2t.min().item()}, d2t_max={drafter_module.d2t.max().item()}"
+                        )
                     drafter_module.lm_head.weight.data.copy_(base_module.lm_head.weight.data[hot_token_id])
                 logger.info("Successfully initialized draft/base lm_head for Eagle3 drafter")
             else:
