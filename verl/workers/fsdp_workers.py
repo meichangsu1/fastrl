@@ -90,7 +90,13 @@ from verl.utils.torch_functional import (
 from verl.workers.config import FSDPCriticConfig, FSDPEngineConfig
 from verl.workers.drafter.eagle3_background_trainer import EAGLE3BackgroundTrainer
 from verl.workers.drafter.eagle_background_trainer import EagleBackgroundTrainer
-from verl.workers.drafter.model import LlamaForCausalLMEagle, LlamaModelEagle3, Qwen2ForCausalLMEagle
+from verl.workers.drafter.model import (
+    LlamaForCausalLMEagle,
+    LlamaModelEagle3,
+    Qwen2ForCausalLMEagle,
+    Qwen2ModelEagle3,
+    Qwen3ModelEagle3,
+)
 from verl.workers.sharding_manager.fsdp_ulysses import FSDPUlyssesShardingManager
 
 logger = logging.getLogger(__file__)
@@ -581,11 +587,14 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
 
         # Import appropriate eagle model class
         if spec_strategy == "EAGLE3":
-            if model_type.lower() != "llama":
-                raise ValueError(
-                    f"EAGLE3 online RL currently only supports llama draft model hot-sync, got model_type={model_type}"
-                )
-            model_class = LlamaModelEagle3
+            if model_type.lower() == "llama":
+                model_class = LlamaModelEagle3
+            elif model_type.lower() == "qwen2":
+                model_class = Qwen2ModelEagle3
+            elif model_type.lower() == "qwen3":
+                model_class = Qwen3ModelEagle3
+            else:
+                raise ValueError(f"Unsupported model type for eagle3: {model_type}")
         else:
             if model_type.lower() == "llama":
                 model_class = LlamaForCausalLMEagle
