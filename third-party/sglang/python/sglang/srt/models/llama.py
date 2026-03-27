@@ -488,7 +488,7 @@ class LlamaForCausalLM(nn.Module):
 
         if self.pp_group.is_last_rank:
             if not get_embedding:
-                if not self._debug_logged_forward_summary:
+                if not getattr(self, "_debug_logged_forward_summary", False):
                     hidden_shape = tuple(hidden_states.shape)
                     lm_head_weight = getattr(self.lm_head, "weight", None)
                     lm_head_shape = (
