@@ -447,6 +447,14 @@ class LlamaForCausalLM(nn.Module):
         ]
 
         self.capture_aux_hidden_states = False
+        self._debug_logged_forward_summary = False
+        logger.warning(
+            "Initialized LlamaForCausalLM with "
+            f"vocab_size={config.vocab_size}, "
+            f"hidden_size={config.hidden_size}, "
+            f"tie_word_embeddings={config.tie_word_embeddings}, "
+            f"capture_aux_hidden_states={self.capture_aux_hidden_states}"
+        )
 
     def _init_model(
         self,
@@ -480,6 +488,24 @@ class LlamaForCausalLM(nn.Module):
 
         if self.pp_group.is_last_rank:
             if not get_embedding:
+                if not self._debug_logged_forward_summary:
+                    hidden_shape = tuple(hidden_states.shape)
+                    lm_head_weight = getattr(self.lm_head, "weight", None)
+                    lm_head_shape = (
+                        tuple(lm_head_weight.shape) if lm_head_weight is not None else None
+                    )
+                    aux_summary = "none"
+                    if aux_hidden_states is not None:
+                        aux_summary = [tuple(x.shape) for x in aux_hidden_states]
+                    logger.warning(
+                        "LlamaForCausalLM forward summary: "
+                        f"hidden_shape={hidden_shape}, "
+                        f"lm_head_shape={lm_head_shape}, "
+                        f"capture_aux_hidden_states={self.capture_aux_hidden_states}, "
+                        f"aux_hidden_states={aux_summary}, "
+                        f"forward_mode={getattr(forward_batch, 'forward_mode', None)}"
+                    )
+                    self._debug_logged_forward_summary = True
                 return self.logits_processor(
                     input_ids,
                     hidden_states,
