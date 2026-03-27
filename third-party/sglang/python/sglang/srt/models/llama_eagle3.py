@@ -232,8 +232,6 @@ class LlamaForCausalLMEagle3(LlamaForCausalLM):
         params_dict = dict(self.named_parameters())
         loaded_key_count = 0
         loaded_key_examples = []
-        d2t_shape = None
-        t2d_shape = None
         # Define the parameter mapping for stacked parameters
         stacked_params_mapping = [
             # (param_name, shard_name, shard_id)
@@ -250,14 +248,12 @@ class LlamaForCausalLMEagle3(LlamaForCausalLM):
                 loaded_key_examples.append(name)
             if "d2t" in name:
                 # d2t stores diffs between draft id and target id
-                d2t_shape = tuple(loaded_weight.shape)
                 self.hot_token_id = loaded_weight + torch.arange(
                     loaded_weight.shape[0], device=loaded_weight.device
                 )
                 continue
 
             if "t2d" in name:
-                t2d_shape = tuple(loaded_weight.shape)
                 continue
 
             for param_name, weight_name, shard_id in stacked_params_mapping:
@@ -284,6 +280,9 @@ class LlamaForCausalLMEagle3(LlamaForCausalLM):
 
         lm_head_weight = getattr(self.lm_head, "weight", None)
         lm_head_shape = tuple(lm_head_weight.shape) if lm_head_weight is not None else None
+        d2t_shape = tuple(self.hot_token_id.shape) if self.hot_token_id is not None else None
+        t2d_buffer = getattr(self.model, "t2d", None)
+        t2d_shape = tuple(t2d_buffer.shape) if t2d_buffer is not None else None
         hot_token_summary = "none"
         if self.hot_token_id is not None:
             hot_token_summary = (

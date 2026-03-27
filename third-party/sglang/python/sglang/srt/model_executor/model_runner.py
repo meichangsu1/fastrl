@@ -2064,6 +2064,17 @@ class ModelRunner:
         skip_attn_backend_init: bool = False,
         pp_proxy_tensors=None,
     ) -> LogitsProcessorOutput:
+        if not getattr(self, "_debug_logged_forward_decode_summary", False):
+            print(
+                "ModelRunner forward_decode summary: "
+                f"is_draft_worker={self.is_draft_worker}, "
+                f"model_cls={self.model.__class__.__name__}, "
+                f"forward_mode={getattr(forward_batch, 'forward_mode', None)}, "
+                f"input_ids_shape={tuple(forward_batch.input_ids.shape) if forward_batch.input_ids is not None else None}, "
+                f"positions_shape={tuple(forward_batch.positions.shape) if forward_batch.positions is not None else None}",
+                flush=True,
+            )
+            self._debug_logged_forward_decode_summary = True
         if not skip_attn_backend_init:
             self.attn_backend.init_forward_metadata(forward_batch)
         # FIXME: add pp_proxy_tensors arg to all models
@@ -2083,6 +2094,18 @@ class ModelRunner:
         skip_attn_backend_init: bool = False,
         pp_proxy_tensors=None,
     ) -> LogitsProcessorOutput:
+        if not getattr(self, "_debug_logged_forward_extend_summary", False):
+            print(
+                "ModelRunner forward_extend summary: "
+                f"is_draft_worker={self.is_draft_worker}, "
+                f"model_cls={self.model.__class__.__name__}, "
+                f"forward_mode={getattr(forward_batch, 'forward_mode', None)}, "
+                f"input_ids_shape={tuple(forward_batch.input_ids.shape) if forward_batch.input_ids is not None else None}, "
+                f"positions_shape={tuple(forward_batch.positions.shape) if forward_batch.positions is not None else None}, "
+                f"has_input_embeds={forward_batch.input_embeds is not None}",
+                flush=True,
+            )
+            self._debug_logged_forward_extend_summary = True
         if not skip_attn_backend_init:
             self.attn_backend.init_forward_metadata(forward_batch)
 
