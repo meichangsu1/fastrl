@@ -230,7 +230,8 @@ class LlamaForCausalLMEagle3(LlamaForCausalLM):
 
     def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]) -> None:
         params_dict = dict(self.named_parameters())
-        loaded_names = []
+        loaded_key_count = 0
+        loaded_key_examples = []
         d2t_shape = None
         t2d_shape = None
         # Define the parameter mapping for stacked parameters
@@ -244,7 +245,9 @@ class LlamaForCausalLMEagle3(LlamaForCausalLM):
         ]
 
         for name, loaded_weight in weights:
-            loaded_names.append(name)
+            loaded_key_count += 1
+            if len(loaded_key_examples) < 6:
+                loaded_key_examples.append(name)
             if "d2t" in name:
                 # d2t stores diffs between draft id and target id
                 d2t_shape = tuple(loaded_weight.shape)
@@ -291,8 +294,8 @@ class LlamaForCausalLMEagle3(LlamaForCausalLM):
             )
         print(
             "LlamaForCausalLMEagle3 load_weights summary: "
-            f"loaded_keys={len(loaded_names)}, "
-            f"sample_keys={loaded_names[:6]}, "
+            f"loaded_keys={loaded_key_count}, "
+            f"sample_keys={loaded_key_examples}, "
             f"d2t_shape={d2t_shape}, "
             f"t2d_shape={t2d_shape}, "
             f"lm_head_shape={lm_head_shape}, "
