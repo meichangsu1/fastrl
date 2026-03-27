@@ -19,6 +19,8 @@ from sglang.srt.utils import add_prefix
 # https://github.com/SafeAILab/EAGLE/blob/main/eagle/model/cnets.py
 """Inference-only LLaMA-EAGLE model compatible with HuggingFace weights."""
 
+import logging
+
 from typing import Iterable, Optional, Tuple
 
 import torch
@@ -37,6 +39,8 @@ from sglang.srt.layers.vocab_parallel_embedding import (
 from sglang.srt.model_executor.forward_batch_info import ForwardBatch, PPProxyTensors
 from sglang.srt.model_loader.weight_utils import default_weight_loader
 from sglang.srt.models.llama import LlamaDecoderLayer, LlamaForCausalLM, LlamaMLP
+
+logger = logging.getLogger(__name__)
 
 
 class LlamaDecoderLayer(LlamaDecoderLayer):
@@ -215,9 +219,19 @@ class LlamaForCausalLMEagle3(LlamaForCausalLM):
         self.logits_processor = LogitsProcessor(config)
         self.capture_aux_hidden_states = True
         self.hot_token_id = None
+        logger.warning(
+            "Initialized LlamaForCausalLMEagle3 with "
+            f"vocab_size={self.config.vocab_size}, "
+            f"draft_vocab_size={getattr(self.config, 'draft_vocab_size', None)}, "
+            f"tie_word_embeddings={self.config.tie_word_embeddings}, "
+            f"load_lm_head_from_target={self.load_lm_head_from_target}"
+        )
 
     def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]) -> None:
         params_dict = dict(self.named_parameters())
+        loaded_names = []
+        d2t_shape = None
+        t2d_shape = None
         # Define the parameter mapping for stacked parameters
         stacked_params_mapping = [
             # (param_name, shard_name, shard_id)
@@ -229,14 +243,17 @@ class LlamaForCausalLMEagle3(LlamaForCausalLM):
         ]
 
         for name, loaded_weight in weights:
+            loaded_names.append(name)
             if "d2t" in name:
                 # d2t stores diffs between draft id and target id
+                d2t_shape = tuple(loaded_weight.shape)
                 self.hot_token_id = loaded_weight + torch.arange(
                     loaded_weight.shape[0], device=loaded_weight.device
                 )
                 continue
 
             if "t2d" in name:
+                t2d_shape = tuple(loaded_weight.shape)
                 continue
 
             for param_name, weight_name, shard_id in stacked_params_mapping:
@@ -260,6 +277,28 @@ class LlamaForCausalLMEagle3(LlamaForCausalLM):
                         param, "weight_loader", default_weight_loader
                     )
                     weight_loader(param, loaded_weight)
+
+        lm_head_weight = getattr(self.lm_head, "weight", None)
+        lm_head_shape = tuple(lm_head_weight.shape) if lm_head_weight is not None else None
+        hot_token_summary = "none"
+        if self.hot_token_id is not None:
+            hot_token_summary = (
+                f"shape={tuple(self.hot_token_id.shape)}, "
+                f"min={int(self.hot_token_id.min().item())}, "
+                f"max={int(self.hot_token_id.max().item())}, "
+                f"device={self.hot_token_id.device}"
+            )
+        logger.warning(
+            "LlamaForCausalLMEagle3 load_weights summary: "
+            f"loaded_keys={len(loaded_names)}, "
+            f"sample_keys={loaded_names[:6]}, "
+            f"d2t_shape={d2t_shape}, "
+            f"t2d_shape={t2d_shape}, "
+            f"lm_head_shape={lm_head_shape}, "
+            f"config_vocab_size={self.config.vocab_size}, "
+            f"config_draft_vocab_size={getattr(self.config, 'draft_vocab_size', None)}, "
+            f"hot_token_id={hot_token_summary}"
+        )
 
     def get_hot_token_id(self):
         return self.hot_token_id
