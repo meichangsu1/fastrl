@@ -219,12 +219,13 @@ class LlamaForCausalLMEagle3(LlamaForCausalLM):
         self.logits_processor = LogitsProcessor(config)
         self.capture_aux_hidden_states = True
         self.hot_token_id = None
-        logger.warning(
+        print(
             "Initialized LlamaForCausalLMEagle3 with "
             f"vocab_size={self.config.vocab_size}, "
             f"draft_vocab_size={getattr(self.config, 'draft_vocab_size', None)}, "
             f"tie_word_embeddings={self.config.tie_word_embeddings}, "
-            f"load_lm_head_from_target={self.load_lm_head_from_target}"
+            f"load_lm_head_from_target={self.load_lm_head_from_target}",
+            flush=True,
         )
 
     def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]) -> None:
@@ -288,7 +289,7 @@ class LlamaForCausalLMEagle3(LlamaForCausalLM):
                 f"max={int(self.hot_token_id.max().item())}, "
                 f"device={self.hot_token_id.device}"
             )
-        logger.warning(
+        print(
             "LlamaForCausalLMEagle3 load_weights summary: "
             f"loaded_keys={len(loaded_names)}, "
             f"sample_keys={loaded_names[:6]}, "
@@ -297,7 +298,8 @@ class LlamaForCausalLMEagle3(LlamaForCausalLM):
             f"lm_head_shape={lm_head_shape}, "
             f"config_vocab_size={self.config.vocab_size}, "
             f"config_draft_vocab_size={getattr(self.config, 'draft_vocab_size', None)}, "
-            f"hot_token_id={hot_token_summary}"
+            f"hot_token_id={hot_token_summary}",
+            flush=True,
         )
 
     def get_hot_token_id(self):
