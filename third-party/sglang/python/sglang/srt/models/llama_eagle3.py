@@ -162,6 +162,25 @@ class LlamaModel(nn.Module):
             positions = forward_batch.mrope_positions
 
         hidden_states = forward_batch.spec_info.hidden_states
+        if not getattr(self, "_debug_logged_llama_model_forward_summary", False):
+            try:
+                pos_min = int(positions.min().item()) if positions.numel() > 0 else None
+                pos_max = int(positions.max().item()) if positions.numel() > 0 else None
+            except Exception:
+                pos_min = pos_max = "unavailable"
+            print(
+                "LlamaEagle3 LlamaModel.forward summary: "
+                f"input_ids_shape={tuple(input_ids.shape) if input_ids is not None else None}, "
+                f"positions_shape={tuple(positions.shape) if positions is not None else None}, "
+                f"positions_min={pos_min}, "
+                f"positions_max={pos_max}, "
+                f"embeds_shape={tuple(embeds.shape)}, "
+                f"hidden_states_shape={tuple(hidden_states.shape)}, "
+                f"hidden_states_dtype={hidden_states.dtype}, "
+                f"forward_mode={getattr(forward_batch, 'forward_mode', None)}",
+                flush=True,
+            )
+            self._debug_logged_llama_model_forward_summary = True
         if hidden_states.shape[-1] != embeds.shape[-1]:
             hidden_states = self.fc(hidden_states)
 

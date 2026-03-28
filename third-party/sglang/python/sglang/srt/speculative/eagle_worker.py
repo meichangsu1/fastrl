@@ -1011,6 +1011,31 @@ class EAGLEWorker(TpModelWorker):
             hidden_states: Hidden states from the target model forward
             next_token_ids: Next token ids generated from the target forward.
         """
+        if not getattr(self, "_debug_logged_forward_draft_extend_summary", False):
+            try:
+                hidden_min = (
+                    float(hidden_states.min().item()) if hidden_states.numel() > 0 else None
+                )
+                hidden_max = (
+                    float(hidden_states.max().item()) if hidden_states.numel() > 0 else None
+                )
+            except Exception:
+                hidden_min = hidden_max = "unavailable"
+            print(
+                "EAGLEWorker forward_draft_extend summary: "
+                f"hidden_states_shape={tuple(hidden_states.shape)}, "
+                f"hidden_states_dtype={hidden_states.dtype}, "
+                f"hidden_states_min={hidden_min}, "
+                f"hidden_states_max={hidden_max}, "
+                f"next_token_ids_shape={tuple(next_token_ids.shape)}, "
+                f"next_token_ids_min={int(next_token_ids.min().item()) if next_token_ids.numel() > 0 else None}, "
+                f"next_token_ids_max={int(next_token_ids.max().item()) if next_token_ids.numel() > 0 else None}, "
+                f"seq_lens_cpu_shape={tuple(seq_lens_cpu.shape) if seq_lens_cpu is not None else None}, "
+                f"batch_size={batch.batch_size}, "
+                f"forward_mode={batch.forward_mode}",
+                flush=True,
+            )
+            self._debug_logged_forward_draft_extend_summary = True
         batch.spec_info = EagleDraftInput(
             hidden_states=hidden_states,
             verified_id=next_token_ids,
