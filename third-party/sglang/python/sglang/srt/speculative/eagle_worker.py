@@ -1011,17 +1011,6 @@ class EAGLEWorker(TpModelWorker):
             hidden_states: Hidden states from the target model forward
             next_token_ids: Next token ids generated from the target forward.
         """
-        if hidden_states is not None and not batch.forward_mode.is_idle():
-            expected_bs = len(batch.seq_lens)
-            if hidden_states.shape[0] != expected_bs and batch.extend_lens is not None:
-                last_token_indices = []
-                pt = 0
-                for extend_len in batch.extend_lens:
-                    last_token_indices.append(pt + extend_len - 1)
-                    pt += extend_len
-                if pt == hidden_states.shape[0] and len(last_token_indices) == expected_bs:
-                    hidden_states = hidden_states[last_token_indices]
-
         if not getattr(self, "_debug_logged_forward_draft_extend_summary", False):
             try:
                 hidden_min = (
