@@ -833,6 +833,19 @@ class EAGLEWorker(TpModelWorker):
             else ForwardMode.IDLE
         )
         batch.spec_info = spec_info
+        if not getattr(self, "_debug_logged_verify_prepare_summary", False):
+            print(
+                "EAGLEWorker verify prepare summary: "
+                f"batch_input_ids_shape={tuple(batch.input_ids.shape) if batch.input_ids is not None else None}, "
+                f"batch_seq_lens_shape={tuple(batch.seq_lens.shape) if batch.seq_lens is not None else None}, "
+                f"batch_seq_lens={batch.seq_lens.tolist() if batch.seq_lens is not None else None}, "
+                f"draft_token_shape={tuple(spec_info.draft_token.shape) if getattr(spec_info, 'draft_token', None) is not None else None}, "
+                f"spec_positions_shape={tuple(spec_info.positions.shape) if getattr(spec_info, 'positions', None) is not None else None}, "
+                f"capture_hidden_mode={spec_info.capture_hidden_mode}, "
+                f"forward_mode={batch.forward_mode}",
+                flush=True,
+            )
+            self._debug_logged_verify_prepare_summary = True
 
         model_worker_batch = batch.get_model_worker_batch(
             seq_lens_cpu_cache=spec_info.seq_lens_cpu
@@ -854,6 +867,15 @@ class EAGLEWorker(TpModelWorker):
             batch_result.logits_output,
             batch_result.can_run_cuda_graph,
         )
+        if not getattr(self, "_debug_logged_verify_forward_summary", False):
+            print(
+                "EAGLEWorker verify target_forward summary: "
+                f"next_token_logits_shape={tuple(logits_output.next_token_logits.shape) if logits_output.next_token_logits is not None else None}, "
+                f"hidden_states_shape={tuple(logits_output.hidden_states.shape) if logits_output.hidden_states is not None else None}, "
+                f"can_run_cuda_graph={can_run_cuda_graph}",
+                flush=True,
+            )
+            self._debug_logged_verify_forward_summary = True
 
         vocab_mask = None
         if batch.has_grammar:
@@ -884,6 +906,16 @@ class EAGLEWorker(TpModelWorker):
             self.page_size,
             vocab_mask,
         )
+        if not getattr(self, "_debug_logged_verify_result_summary", False):
+            print(
+                "EAGLEWorker verify result summary: "
+                f"accepted_indices_shape={tuple(res.accepted_indices.shape) if res.accepted_indices is not None else None}, "
+                f"verified_id_shape={tuple(res.verified_id.shape) if res.verified_id is not None else None}, "
+                f"draft_hidden_states_shape={tuple(res.draft_input.hidden_states.shape) if res.draft_input and res.draft_input.hidden_states is not None else None}, "
+                f"accept_length_per_req_cpu={res.accept_length_per_req_cpu}",
+                flush=True,
+            )
+            self._debug_logged_verify_result_summary = True
 
         # Post process based on verified outputs.
         # Pick indices that we care (accepted)
