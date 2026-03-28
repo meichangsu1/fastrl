@@ -1011,6 +1011,17 @@ class EAGLEWorker(TpModelWorker):
             hidden_states: Hidden states from the target model forward
             next_token_ids: Next token ids generated from the target forward.
         """
+        if hidden_states is not None and not batch.forward_mode.is_idle():
+            expected_bs = len(batch.seq_lens)
+            if hidden_states.shape[0] != expected_bs and batch.extend_lens is not None:
+                last_token_indices = []
+                pt = 0
+                for extend_len in batch.extend_lens:
+                    last_token_indices.append(pt + extend_len - 1)
+                    pt += extend_len
+                if pt == hidden_states.shape[0] and len(last_token_indices) == expected_bs:
+                    hidden_states = hidden_states[last_token_indices]
+
         if not getattr(self, "_debug_logged_forward_draft_extend_summary", False):
             try:
                 hidden_min = (
@@ -1031,7 +1042,8 @@ class EAGLEWorker(TpModelWorker):
                 f"next_token_ids_min={int(next_token_ids.min().item()) if next_token_ids.numel() > 0 else None}, "
                 f"next_token_ids_max={int(next_token_ids.max().item()) if next_token_ids.numel() > 0 else None}, "
                 f"seq_lens_cpu_shape={tuple(seq_lens_cpu.shape) if seq_lens_cpu is not None else None}, "
-                f"batch_size={batch.batch_size}, "
+                f"batch_size={batch.batch_size() if callable(getattr(batch, 'batch_size', None)) else batch.batch_size}, "
+                f"extend_lens={batch.extend_lens}, "
                 f"forward_mode={batch.forward_mode}",
                 flush=True,
             )
