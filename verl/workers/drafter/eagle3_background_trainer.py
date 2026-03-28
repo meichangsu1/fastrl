@@ -420,6 +420,21 @@ class EAGLE3BackgroundTrainer:
                     f"got={base_hidden_states_concat.size(-1)}, expected_fc_in_features={expected_fc_in_features}, "
                     f"target_hidden_size={expected_hidden_dim}"
                 )
+
+        target_hidden_states_concat = hidden_states_concat
+        if target_hidden_states_concat.size(-1) != expected_hidden_dim:
+            if target_hidden_states_concat.size(-1) > expected_hidden_dim:
+                logger.warning(
+                    f"[Rank {self.rank}] target_hidden_states dim={target_hidden_states_concat.size(-1)} "
+                    f"does not match base_model_lm_head in_features={expected_hidden_dim}. "
+                    "Using the last hidden-state chunk for teacher logits."
+                )
+                target_hidden_states_concat = target_hidden_states_concat[..., -expected_hidden_dim:]
+            else:
+                logger.warning(
+                    f"[Rank {self.rank}] target_hidden_states dim={target_hidden_states_concat.size(-1)} "
+                    f"is smaller than expected_hidden_dim={expected_hidden_dim}"
+                )
         total_seq_len = input_ids_concat.size(1)
         attn_mask = torch.ones((1, total_seq_len), dtype=torch.long, device=dev)
 
@@ -433,6 +448,9 @@ class EAGLE3BackgroundTrainer:
                 base_hidden_states_concat = torch.nn.functional.pad(
                     base_hidden_states_concat, (0, 0, 0, pad_size), value=0.0
                 )
+                target_hidden_states_concat = torch.nn.functional.pad(
+                    target_hidden_states_concat, (0, 0, 0, pad_size), value=0.0
+                )
                 attn_mask = torch.nn.functional.pad(attn_mask, (0, pad_size), value=0)
 
             from verl.utils.ulysses import slice_input_tensor
@@ -440,12 +458,13 @@ class EAGLE3BackgroundTrainer:
             loss_mask_concat = slice_input_tensor(loss_mask_concat, dim=1, padding=False)
             hidden_states_concat = slice_input_tensor(hidden_states_concat, dim=1, padding=False)
             base_hidden_states_concat = slice_input_tensor(base_hidden_states_concat, dim=1, padding=False)
+            target_hidden_states_concat = slice_input_tensor(target_hidden_states_concat, dim=1, padding=False)
             attn_mask = slice_input_tensor(attn_mask, dim=1, padding=False)
             self._current_pad_size = pad_size
         else:
             self._current_pad_size = 0
 
-        target_hidden_states = hidden_states_concat[:, 1:].contiguous()
+        target_hidden_states = target_hidden_states_concat[:, 1:].contiguous()
         loss_mask = loss_mask_concat[:, 1:].contiguous()
         input_ids = input_ids_concat[:, :-1].contiguous()
         attention_mask = attn_mask[:, :-1].contiguous()
