@@ -915,6 +915,19 @@ class EAGLEWorker(TpModelWorker):
             ForwardMode.DECODE if not batch.forward_mode.is_idle() else ForwardMode.IDLE
         )
         batch.spec_info = res.draft_input
+        if not getattr(self, "_debug_logged_post_verify_decode_summary", False):
+            print(
+                "EAGLEWorker post_verify decode summary: "
+                f"batch_input_ids_shape={tuple(batch.input_ids.shape) if batch.input_ids is not None else None}, "
+                f"batch_seq_lens_shape={tuple(batch.seq_lens.shape) if batch.seq_lens is not None else None}, "
+                f"batch_seq_lens={batch.seq_lens.tolist() if batch.seq_lens is not None else None}, "
+                f"verified_id_shape={tuple(res.verified_id.shape) if res.verified_id is not None else None}, "
+                f"draft_hidden_states_shape={tuple(res.draft_input.hidden_states.shape) if res.draft_input and res.draft_input.hidden_states is not None else None}, "
+                f"draft_accept_length={res.draft_input.accept_length.tolist() if res.draft_input and res.draft_input.accept_length is not None else None}, "
+                f"forward_mode={batch.forward_mode}",
+                flush=True,
+            )
+            self._debug_logged_post_verify_decode_summary = True
 
         return logits_output, res, model_worker_batch, can_run_cuda_graph
 

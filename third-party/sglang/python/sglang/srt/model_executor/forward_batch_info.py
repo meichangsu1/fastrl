@@ -403,6 +403,19 @@ class ForwardBatch:
         if ret.forward_mode.is_decode() or ret.forward_mode.is_target_verify():
             if ret.positions is None:
                 ret.positions = clamp_position(batch.seq_lens)
+            if not getattr(ret, "_debug_logged_decode_init_summary", False):
+                print(
+                    "ForwardBatch init_new decode summary: "
+                    f"input_ids_shape={tuple(ret.input_ids.shape) if ret.input_ids is not None else None}, "
+                    f"seq_lens_shape={tuple(ret.seq_lens.shape) if ret.seq_lens is not None else None}, "
+                    f"seq_lens={ret.seq_lens.tolist() if ret.seq_lens is not None else None}, "
+                    f"positions_shape={tuple(ret.positions.shape) if ret.positions is not None else None}, "
+                    f"positions={ret.positions.tolist() if ret.positions is not None and ret.positions.numel() <= 16 else None}, "
+                    f"forward_mode={ret.forward_mode}, "
+                    f"spec_info_type={type(ret.spec_info).__name__ if ret.spec_info is not None else None}",
+                    flush=True,
+                )
+                ret._debug_logged_decode_init_summary = True
         else:
             ret.extend_seq_lens = torch.tensor(
                 batch.extend_seq_lens, dtype=torch.int32
