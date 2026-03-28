@@ -304,6 +304,39 @@ class EAGLEDraftCudaGraphRunner:
 
         num_tokens = bs * self.num_tokens_per_bs
 
+        if not getattr(self, "_debug_logged_replay_summary", False):
+            try:
+                pos_min = (
+                    int(forward_batch.positions.min().item())
+                    if forward_batch.positions is not None
+                    and forward_batch.positions.numel() > 0
+                    else None
+                )
+                pos_max = (
+                    int(forward_batch.positions.max().item())
+                    if forward_batch.positions is not None
+                    and forward_batch.positions.numel() > 0
+                    else None
+                )
+            except Exception:
+                pos_min = pos_max = "unavailable"
+            print(
+                "EAGLEDraftCudaGraphRunner replay summary: "
+                f"raw_bs={raw_bs}, "
+                f"bs={bs}, "
+                f"raw_num_token={raw_num_token}, "
+                f"num_tokens={num_tokens}, "
+                f"positions_shape={tuple(forward_batch.positions.shape) if forward_batch.positions is not None else None}, "
+                f"positions_min={pos_min}, "
+                f"positions_max={pos_max}, "
+                f"seq_lens_shape={tuple(forward_batch.seq_lens.shape) if forward_batch.seq_lens is not None else None}, "
+                f"hidden_states_shape={tuple(forward_batch.spec_info.hidden_states.shape) if forward_batch.spec_info and forward_batch.spec_info.hidden_states is not None else None}, "
+                f"topk_p_shape={tuple(forward_batch.spec_info.topk_p.shape) if forward_batch.spec_info and forward_batch.spec_info.topk_p is not None else None}, "
+                f"topk_index_shape={tuple(forward_batch.spec_info.topk_index.shape) if forward_batch.spec_info and forward_batch.spec_info.topk_index is not None else None}",
+                flush=True,
+            )
+            self._debug_logged_replay_summary = True
+
         # Common inputs
         self.req_pool_indices[:raw_bs].copy_(forward_batch.req_pool_indices)
         self.seq_lens[:raw_bs].copy_(forward_batch.seq_lens)

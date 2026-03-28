@@ -252,6 +252,26 @@ class RotaryEmbedding(CustomOp):
         offsets: Optional[torch.Tensor] = None,
         fused_set_kv_buffer_arg: Optional[FusedSetKVBufferArg] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
+        if not getattr(self, "_debug_logged_forward_cuda_summary", False):
+            try:
+                pos_min = int(positions.min().item()) if positions.numel() > 0 else None
+                pos_max = int(positions.max().item()) if positions.numel() > 0 else None
+            except Exception:
+                pos_min = pos_max = "unavailable"
+            print(
+                "RotaryEmbedding forward_cuda summary: "
+                f"positions_shape={tuple(positions.shape)}, "
+                f"positions_min={pos_min}, "
+                f"positions_max={pos_max}, "
+                f"query_shape={tuple(query.shape)}, "
+                f"key_shape={tuple(key.shape)}, "
+                f"head_size={self.head_size}, "
+                f"rotary_dim={self.rotary_dim}, "
+                f"max_position_embeddings={self.max_position_embeddings}, "
+                f"cache_shape={tuple(self.cos_sin_cache.shape)}",
+                flush=True,
+            )
+            self._debug_logged_forward_cuda_summary = True
         if _is_cuda and (self.head_size in [64, 128, 256, 512]):
             apply_rope_with_cos_sin_cache_inplace(
                 positions=positions,
